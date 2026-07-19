@@ -1,3 +1,5 @@
+import { INTERVENTION_MODEL, RECAP_MODEL } from './models'
+
 export type CoachType = 'HINT' | 'WORD' | 'RECAP' | 'NONE'
 
 export interface CoachDecision {
@@ -20,6 +22,7 @@ export interface CoachContext {
 
 export interface CoachEngine {
   decide(context: CoachContext): Promise<CoachDecision>
+  createRecap(transcriptWindow: TranscriptTurn[]): Promise<CoachDecision>
 }
 
 const COACH_SCHEMA = {
@@ -39,8 +42,28 @@ const COACH_SCHEMA = {
       },
       ttl_ms: {
         type: 'integer',
-        minimum: 0,
-        maximum: 5000,
+        minimum: 3500,
+        maximum: 6000,
+      },
+    },
+  },
+} as const
+
+const RECAP_SCHEMA = {
+  name: 'lingualens_recap',
+  strict: true,
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['text', 'ttl_ms'],
+    properties: {
+      text: {
+        type: 'string',
+      },
+      ttl_ms: {
+        type: 'integer',
+        minimum: 3500,
+        maximum: 6000,
       },
     },
   },
@@ -56,7 +79,7 @@ export function createCoachEngine(apiKey: string): CoachEngine {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'gpt-5.6',
+          model: INTERVENTION_MODEL,
           input: [
             {
               role: 'system',
@@ -64,7 +87,7 @@ export function createCoachEngine(apiKey: string): CoachEngine {
                 {
                   type: 'input_text',
                   text:
-                    'You are LinguaLens, a restrained English conversation coach for smart glasses. Return JSON only. Favor NONE unless a short intervention is clearly useful. HINT gives only the first two English words plus ellipsis, not full answers. WORD gives one difficult word plus a simple paraphrase of at most 3 words. RECAP appears only at a pause and only for one missed expression. Keep text readable within 2 seconds.',
+                    'You are LinguaLens, a restrained English conversation coach for smart glasses. Return JSON only. Favor NONE unless a short intervention is clearly useful. HINT gives only the first two English words plus ellipsis, not full answers. WORD gives one difficult word plus a simple paraphrase of at most 3 words. Never emit RECAP here. Keep text readable within 2 seconds.',
                 },
               ],
             },
@@ -97,23 +120,65 @@ export function createCoachEngine(apiKey: string): CoachEngine {
         throw new Error(`OpenAI coach failed: ${response.status}`)
       }
 
-      const data = (await response.json()) as {
-        output_text?: string
-        output?: Array<{
-          content?: Array<{
-            type?: string
-            text?: string
-          }>
-        }>
+      const parsed = JSON.parse(await readOutputText(response)) as CoachDecision
+      const decision = sanitizeDecision(parsed)
+      return decision.type === 'RECAP' ? NONE : decision
+    },
+
+    async createRecap(transcriptWindow: TranscriptTurn[]): Promise<CoachDecision> {
+      const response = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: RECAP_MODEL,
+          input: [
+            {
+              role: 'system',
+              content: [
+                {
+                  type: 'input_text',
+                  text:
+                    'You create one recap card for an English learner after a pause in conversation. Return JSON only. Choose one expression the learner likely wanted but could not say. Keep it short enough for a smart-glasses HUD and do not include explanation sentences.',
+                },
+              ],
+            },
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'input_text',
+                  text: JSON.stringify({
+                    instruction: 'Return one missed expression from the recent exchange.',
+                    transcriptWindow,
+                  }),
+                },
+              ],
+            },
+          ],
+          text: {
+            format: {
+              type: 'json_schema',
+              name: RECAP_SCHEMA.name,
+              strict: RECAP_SCHEMA.strict,
+              schema: RECAP_SCHEMA.schema,
+            },
+          },
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`OpenAI recap failed: ${response.status}`)
       }
 
-      const raw =
-        data.output_text ??
-        data.output?.flatMap(item => item.content ?? []).find(item => item.type === 'output_text')?.text ??
-        ''
-
-      const parsed = JSON.parse(raw) as CoachDecision
-      return sanitizeDecision(parsed)
+      const parsed = JSON.parse(await readOutputText(response)) as { text: string; ttl_ms: number }
+      return sanitizeDecision({
+        type: 'RECAP',
+        text: parsed.text,
+        ttl_ms: parsed.ttl_ms,
+      })
     },
   }
 }
@@ -129,28 +194,29 @@ export function createMockCoachEngine(): CoachEngine {
         return {
           type: 'HINT',
           text: 'You could…',
-          ttl_ms: 2200,
+          ttl_ms: 3500,
         }
       }
       if (last.role === 'partner' && /(deadline|iterate|prototype|stakeholder|feasible)/.test(text)) {
         return {
           type: 'WORD',
           text: pickWord(last.text),
-          ttl_ms: 2400,
-        }
-      }
-      if (
-        context.transcriptWindow.length >= 4 &&
-        last.role === 'speaker' &&
-        /(thanks|okay|got it|sounds good)/.test(text)
-      ) {
-        return {
-          type: 'RECAP',
-          text: 'Try: I am still thinking…',
-          ttl_ms: 2600,
+          ttl_ms: 4000,
         }
       }
       return NONE
+    },
+
+    async createRecap(transcriptWindow: TranscriptTurn[]): Promise<CoachDecision> {
+      const recentSpeaker = [...transcriptWindow]
+        .reverse()
+        .find(entry => entry.role === 'speaker' && /(uh|um|i want say|not sure|how to say)/i.test(entry.text))
+
+      return {
+        type: 'RECAP',
+        text: recentSpeaker ? `Try: ${toMockRecap(recentSpeaker.text)}` : 'Try: Let me think for a second.',
+        ttl_ms: 5000,
+      }
     },
   }
 }
@@ -164,13 +230,31 @@ const NONE: CoachDecision = {
 function sanitizeDecision(value: CoachDecision): CoachDecision {
   if (!value || !['HINT', 'WORD', 'RECAP', 'NONE'].includes(value.type)) return NONE
   const text = typeof value.text === 'string' ? value.text.trim().slice(0, 80) : ''
-  const ttl_ms = Number.isFinite(value.ttl_ms) ? Math.max(0, Math.min(5000, value.ttl_ms)) : 0
-  if (value.type === 'NONE') return NONE
+  const ttl_ms = Number.isFinite(value.ttl_ms) ? Math.max(3500, Math.min(6000, value.ttl_ms)) : 0
+  if (value.type === 'NONE' || !text) return NONE
   return {
     type: value.type,
     text,
-    ttl_ms: ttl_ms || 2200,
+    ttl_ms: ttl_ms || 3500,
   }
+}
+
+async function readOutputText(response: Response): Promise<string> {
+  const data = (await response.json()) as {
+    output_text?: string
+    output?: Array<{
+      content?: Array<{
+        type?: string
+        text?: string
+      }>
+    }>
+  }
+
+  return (
+    data.output_text ??
+    data.output?.flatMap(item => item.content ?? []).find(item => item.type === 'output_text')?.text ??
+    ''
+  )
 }
 
 function pickWord(text: string): string {
@@ -181,4 +265,11 @@ function pickWord(text: string): string {
   if (lower.includes('feasible')) return 'feasible = can do'
   if (lower.includes('deadline')) return 'deadline = due date'
   return 'key word = simpler phrase'
+}
+
+function toMockRecap(text: string): string {
+  const lower = text.toLowerCase()
+  if (lower.includes('i want say')) return 'I mean to say…'
+  if (lower.includes('not sure')) return 'I am not sure yet.'
+  return 'Let me think for a second.'
 }

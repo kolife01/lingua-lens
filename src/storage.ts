@@ -39,7 +39,10 @@ export async function loadSessionLog(bridge: EvenAppBridge): Promise<SessionLogE
 
 export async function saveSessionLog(bridge: EvenAppBridge, entries: SessionLogEntry[]): Promise<void> {
   try {
-    await bridge.setLocalStorage(SESSION_LOG_STORAGE_KEY, JSON.stringify(entries.slice(0, 6)))
+    const filtered = entries
+      .filter(entry => typeof entry.text === 'string' && entry.text.trim().length > 0)
+      .slice(0, 6)
+    await bridge.setLocalStorage(SESSION_LOG_STORAGE_KEY, JSON.stringify(filtered))
   } catch {
     // ignore
   }

@@ -1,3 +1,5 @@
+import { ASR_MODEL } from '../models'
+
 export interface BatchTranscriberOptions {
   apiKey: string
   onTranscript: (text: string) => void | Promise<void>
@@ -6,7 +8,7 @@ export interface BatchTranscriberOptions {
 
 export interface BatchTranscriber {
   sendPcm(chunk: Uint8Array): void
-  close(): void
+  close(): Promise<void>
 }
 
 const SAMPLE_RATE = 16000
@@ -29,10 +31,11 @@ export function createBatchTranscriber(options: BatchTranscriberOptions): BatchT
     chunks.push(new Uint8Array(chunk))
   }
 
-  function close(): void {
+  async function close(): Promise<void> {
     closed = true
     window.clearInterval(timer)
-    void flush(true)
+    await flush(true)
+    await inFlight
   }
 
   async function flush(force: boolean): Promise<void> {
@@ -62,7 +65,7 @@ export function createBatchTranscriber(options: BatchTranscriberOptions): BatchT
 
 async function transcribeWav(apiKey: string, wavBytes: Uint8Array): Promise<string> {
   const form = new FormData()
-  form.append('model', 'gpt-4o-mini-transcribe')
+  form.append('model', ASR_MODEL)
   const wavBuffer = new ArrayBuffer(wavBytes.byteLength)
   new Uint8Array(wavBuffer).set(wavBytes)
   form.append('file', new Blob([wavBuffer], { type: 'audio/wav' }), 'speech.wav')

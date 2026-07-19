@@ -18,6 +18,13 @@ export async function renderHeroPng(label: string): Promise<Uint8Array> {
   const ctx = canvas.getContext('2d')
   if (!ctx) return new Uint8Array()
 
+  if (!label || label === 'CLEAR') {
+    ctx.clearRect(0, 0, WIDTH, HEIGHT)
+    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'))
+    if (!blob) return new Uint8Array()
+    return new Uint8Array(await blob.arrayBuffer())
+  }
+
   const style = HERO_STYLE[label] ?? HERO_STYLE.NONE
   ctx.fillStyle = style.bg
   ctx.fillRect(0, 0, WIDTH, HEIGHT)

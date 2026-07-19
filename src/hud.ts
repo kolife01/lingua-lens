@@ -20,18 +20,27 @@ export function createHudRenderer(options: HudRendererOptions) {
   let lastImageAt = 0
   let pendingText: number | null = null
   let pendingImage: number | null = null
+  let imageUpdateInFlight = false
   let lastTexts = {
     status: '',
     body: '',
     aux: '',
   }
   let lastHero = ''
+  let displayedHero = ''
 
   async function renderIdle(status: string, body: string, aux: string, heroLabel: string): Promise<void> {
     queueText('status', status)
     queueText('body', body)
     queueText('aux', aux)
     queueImage(heroLabel)
+  }
+
+  async function renderQuiet(status: string): Promise<void> {
+    queueText('status', status)
+    queueText('body', '')
+    queueText('aux', '')
+    queueImage('CLEAR')
   }
 
   async function renderCard(type: string, body: string, aux: string): Promise<void> {
@@ -76,12 +85,25 @@ export function createHudRenderer(options: HudRendererOptions) {
 
   function queueImage(label: string): void {
     lastHero = label
+    scheduleImageFlush()
+  }
+
+  function scheduleImageFlush(): void {
+    if (pendingImage !== null || imageUpdateInFlight || lastHero === displayedHero) return
     const waitMs = Math.max(0, IMAGE_MIN_INTERVAL_MS - (Date.now() - lastImageAt))
-    if (pendingImage !== null) return
-    pendingImage = window.setTimeout(async () => {
+    pendingImage = window.setTimeout(() => {
       pendingImage = null
-      lastImageAt = Date.now()
-      const data = await renderHeroPng(lastHero)
+      void flushImage()
+    }, waitMs)
+  }
+
+  async function flushImage(): Promise<void> {
+    if (imageUpdateInFlight || lastHero === displayedHero) return
+    imageUpdateInFlight = true
+    const nextHero = lastHero
+    lastImageAt = Date.now()
+    try {
+      const data = await renderHeroPng(nextHero)
       await bridge.updateImageRawData(
         new ImageRawDataUpdate({
           containerID: ids.hero,
@@ -89,11 +111,16 @@ export function createHudRenderer(options: HudRendererOptions) {
           imageData: data,
         }),
       )
-    }, waitMs)
+      displayedHero = nextHero
+    } finally {
+      imageUpdateInFlight = false
+      if (lastHero !== displayedHero) scheduleImageFlush()
+    }
   }
 
   return {
     renderIdle,
+    renderQuiet,
     renderCard,
   }
 }

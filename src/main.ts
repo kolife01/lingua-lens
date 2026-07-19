@@ -24,7 +24,11 @@ import {
 } from './coach'
 import { createHudRenderer } from './hud'
 import { createBatchTranscriber } from './asr/stt'
-import { createDemoScript } from './demo'
+import {
+  DEMO_LOOP_DURATION_MS,
+  DEMO_SCRIPT,
+  getDemoItemsDueSince,
+} from './demo'
 
 const bridge = await waitForEvenAppBridge()
 
@@ -39,8 +43,12 @@ const HERO_HEIGHT = 100
 
 const DEMO_PARAM = new URLSearchParams(window.location.search).get('demo')
 const MOCK_PARAM = new URLSearchParams(window.location.search).get('mock')
+const LOOP_PARAM = new URLSearchParams(window.location.search).get('loop')
 const DEMO_MODE = DEMO_PARAM === '1' || DEMO_PARAM === 'true'
 const FORCE_MOCK = MOCK_PARAM === '1' || MOCK_PARAM === 'true'
+const LOOP_DEMO = LOOP_PARAM === '1' || LOOP_PARAM === 'true'
+const RECAP_SILENCE_MS = 8000
+const HEARTBEAT_INTERVAL_MS = 250
 
 type EngineMode = 'setup' | 'live' | 'demo'
 type TranscriptRole = 'speaker' | 'partner'
@@ -71,6 +79,16 @@ let shutdownStarted = false
 let lastSavedLog: SessionLogEntry[] = []
 let activePcmHandler: ((pcm: Uint8Array) => void) | null = null
 let activeShutdownHandler: (() => Promise<void>) | null = null
+let recapInFlight = false
+let activeCardShownAt = 0
+let lastSpeechAt = 0
+let recapCycleToken = 0
+let recapTriggeredToken = -1
+let recapTriggerSourceIsDemo = false
+let demoLoopIndex = 0
+let demoInjectedCount = 0
+let demoHeartbeatStartAt = 0
+window.setInterval(runHeartbeat, HEARTBEAT_INTERVAL_MS)
 
 await initializePage()
 attachRootEvents()
@@ -187,18 +205,36 @@ async function enterSetup(): Promise<void> {
 
 async function startLive(): Promise<void> {
   mode = 'live'
+  shutdownStarted = false
   coach = FORCE_MOCK ? createMockCoachEngine() : createCoachEngine(apiKey)
   transcriptLog = []
   activeCard = { type: 'NONE', text: '', ttl_ms: 0 }
+  activeCardShownAt = 0
+  lastSpeechAt = 0
+  recapCycleToken = 0
+  recapTriggeredToken = -1
+  recapTriggerSourceIsDemo = false
+  demoLoopIndex = 0
+  demoInjectedCount = 0
+  demoHeartbeatStartAt = 0
   setEngineState('listening', FORCE_MOCK ? 'Live mic · mock coach' : 'Live mic · OpenAI coach')
   setTranscript('', '')
   setTranscriptMeta(lastSavedLog[0]?.text ? `Previous recap: ${lastSavedLog[0].text}` : 'Listening for speech')
-  await hud.renderIdle(
-    'LIVE',
-    lastSavedLog[0]?.text ? `Prev recap\n${lastSavedLog[0].text}` : 'Listening…',
-    FORCE_MOCK ? 'Mock coach active' : 'GPT coach active',
-    'LIVE',
-  )
+  if (lastSavedLog[0]?.type === 'RECAP' && lastSavedLog[0]?.text) {
+    await presentDecision('RECAP', {
+      type: 'RECAP',
+      text: lastSavedLog[0].text,
+      ttl_ms: 5000,
+    })
+  } else {
+    await hud.renderIdle(
+      'LIVE',
+      'Listening…',
+      FORCE_MOCK ? 'Mock coach active' : 'GPT coach active',
+      'LIVE',
+    )
+    setHudCard('NONE', 'No intervention')
+  }
 
   const transcriber = createBatchTranscriber({
     apiKey,
@@ -216,32 +252,36 @@ async function startLive(): Promise<void> {
   await bridge.audioControl(true)
   activePcmHandler = pcm => transcriber.sendPcm(pcm)
   activeShutdownHandler = async () => {
-    transcriber.close()
+    await transcriber.close()
     await stopLive()
   }
 }
 
 async function startDemo(): Promise<void> {
   mode = 'demo'
+  shutdownStarted = false
   coach = apiKey && !FORCE_MOCK ? createCoachEngine(apiKey) : createMockCoachEngine()
   transcriptLog = []
   activeCard = { type: 'NONE', text: '', ttl_ms: 0 }
+  activeCardShownAt = 0
   const engineLabel = apiKey && !FORCE_MOCK ? 'Demo script · GPT coach' : 'Demo script · mock coach'
   setEngineState('connecting', engineLabel)
   setTranscript('', '')
-  setTranscriptMeta('ASR bypassed in demo mode.')
+  setTranscriptMeta(LOOP_DEMO ? 'ASR bypassed in demo mode · looping script' : 'ASR bypassed in demo mode.')
   await hud.renderIdle('DEMO', 'Injecting scripted turns…', engineLabel, 'DEMO')
+  setHudCard('NONE', 'No intervention')
 
   activePcmHandler = null
   activeShutdownHandler = async () => {
-    demo.stop()
     await stopLive()
   }
-
-  const demo = createDemoScript()
-  demo.start(async item => {
-    await registerTranscript(item.role, item.text, true)
-  })
+  demoInjectedCount = 0
+  demoLoopIndex = 0
+  demoHeartbeatStartAt = performance.now()
+  lastSpeechAt = demoHeartbeatStartAt
+  recapCycleToken = 0
+  recapTriggeredToken = -1
+  recapTriggerSourceIsDemo = true
 }
 
 async function stopLive(): Promise<void> {
@@ -252,17 +292,17 @@ async function stopLive(): Promise<void> {
   } catch {
     // ignore
   }
-  if (transcriptLog.length > 0) {
-    const recap = [...transcriptLog]
-      .reverse()
-      .find(entry => entry.role === 'speaker' && entry.text.length > 0)
-    if (recap) {
-      lastSavedLog = [{ type: activeCard.type, text: recap.text.slice(0, 120), createdAt: Date.now() }]
-      await saveSessionLog(bridge, lastSavedLog)
-    }
+  const latestRecap = [...transcriptLog]
+    .reverse()
+    .find(entry => entry.role === 'speaker' && entry.text.startsWith('[RECAP] '))
+  if (latestRecap) {
+    lastSavedLog = [{ type: 'RECAP', text: latestRecap.text.replace(/^\[RECAP\]\s*/, '').slice(0, 120), createdAt: Date.now() }]
+    await saveSessionLog(bridge, lastSavedLog)
   }
   activePcmHandler = null
   activeShutdownHandler = null
+  activeCardShownAt = 0
+  lastSpeechAt = 0
 }
 
 function attachRootEvents(): void {
@@ -304,6 +344,9 @@ async function registerTranscript(role: TranscriptRole, text: string, fromDemo: 
   }
 
   transcriptLog = [...transcriptLog, entry].slice(-12)
+  lastSpeechAt = performance.now()
+  recapCycleToken += 1
+  recapTriggerSourceIsDemo = fromDemo
   const speakerLabel = role === 'speaker' ? 'You' : 'Partner'
   const transcriptView = transcriptLog.map(item => `${item.role === 'speaker' ? 'You' : 'Them'}: ${item.text}`).join('\n')
   setTranscript(transcriptView, '')
@@ -326,22 +369,106 @@ async function registerTranscript(role: TranscriptRole, text: string, fromDemo: 
 }
 
 async function renderDecision(sourceLabel: string, decision: CoachDecision): Promise<void> {
-  activeCard = decision
   if (decision.type === 'NONE') {
-    await hud.renderIdle(
-      mode === 'demo' ? 'DEMO' : 'LIVE',
-      `${sourceLabel}: ${transcriptLog[transcriptLog.length - 1]?.text ?? ''}`.slice(0, 96),
-      'No intervention',
-      mode === 'demo' ? 'DEMO' : 'LIVE',
-    )
-    setHudCard('NONE', 'No intervention')
+    if (activeCard.type !== 'NONE' && activeCardShownAt > 0) {
+      const now = performance.now()
+      if (now - activeCardShownAt < activeCard.ttl_ms) return
+    }
+    await renderQuiet(`${mode === 'demo' ? 'DEMO' : 'LIVE'} · ${sourceLabel}`)
     return
   }
 
+  await presentDecision(sourceLabel, decision)
+}
+
+async function presentDecision(sourceLabel: string, decision: CoachDecision): Promise<void> {
+  activeCard = decision
+  activeCardShownAt = performance.now()
   const body = decision.text
   const aux = `${sourceLabel} · ${decision.ttl_ms}ms`
   await hud.renderCard(decision.type, body, aux)
   setHudCard(decision.type, body)
+}
+
+async function renderQuiet(status: string): Promise<void> {
+  activeCard = { type: 'NONE', text: '', ttl_ms: 0 }
+  activeCardShownAt = 0
+  await hud.renderQuiet(status)
+  setHudCard('NONE', 'No intervention')
+}
+
+async function triggerRecap(fromDemo: boolean): Promise<void> {
+  if (recapInFlight || !coach || transcriptLog.length === 0) return
+  const lastEntry = transcriptLog[transcriptLog.length - 1]
+  if (!lastEntry || lastEntry.text.startsWith('[RECAP] ')) return
+
+  recapInFlight = true
+  try {
+    const decision = await coach.createRecap(transcriptLog)
+    if (decision.type === 'NONE') return
+    transcriptLog = [
+      ...transcriptLog,
+      {
+        id: `${Date.now()}-recap`,
+        role: 'speaker' as const,
+        text: `[RECAP] ${decision.text}`,
+        timestamp: new Date().toISOString(),
+        createdAt: Date.now(),
+      },
+    ].slice(-12)
+    const transcriptView = transcriptLog.map(item => `${item.role === 'speaker' ? 'You' : 'Them'}: ${item.text}`).join('\n')
+    setTranscript(transcriptView, '')
+    setTranscriptMeta(fromDemo ? 'Demo timeline active · recap pause' : 'Silence recap generated')
+    lastSavedLog = [{ type: 'RECAP', text: decision.text, createdAt: Date.now() }]
+    await presentDecision('RECAP pause', decision)
+  } catch (err) {
+    console.error('Recap error:', err)
+    setEngineState('error', `Recap: ${getErrorMessage(err)}`)
+  } finally {
+    recapInFlight = false
+  }
+}
+
+function runHeartbeat(): void {
+  const now = performance.now()
+
+  if (mode === 'demo' && demoHeartbeatStartAt > 0) {
+    const elapsedInLoop = updateDemoLoop(now)
+    const dueItems = getDemoItemsDueSince(DEMO_SCRIPT, elapsedInLoop, demoInjectedCount)
+    if (dueItems.length > 0) {
+      demoInjectedCount += dueItems.length
+      for (const item of dueItems) {
+        void registerTranscript(item.role, item.text, true)
+      }
+    }
+  }
+
+  if (activeCard.type !== 'NONE' && activeCardShownAt > 0 && now - activeCardShownAt >= activeCard.ttl_ms) {
+    void renderQuiet(mode === 'demo' ? 'DEMO quiet' : 'LIVE quiet')
+  }
+
+  if (
+    lastSpeechAt > 0 &&
+    now - lastSpeechAt > RECAP_SILENCE_MS &&
+    recapTriggeredToken !== recapCycleToken &&
+    !recapInFlight
+  ) {
+    recapTriggeredToken = recapCycleToken
+    void triggerRecap(recapTriggerSourceIsDemo)
+  }
+}
+
+function updateDemoLoop(now: number): number {
+  if (!LOOP_DEMO) return Math.max(0, now - demoHeartbeatStartAt)
+  const totalElapsed = Math.max(0, now - demoHeartbeatStartAt)
+  const nextLoopIndex = Math.floor(totalElapsed / DEMO_LOOP_DURATION_MS)
+  if (nextLoopIndex !== demoLoopIndex) {
+    demoLoopIndex = nextLoopIndex
+    demoInjectedCount = 0
+    recapCycleToken += 1
+    recapTriggeredToken = -1
+  }
+  return totalElapsed % DEMO_LOOP_DURATION_MS
 }
 
 function normalizeTranscriptText(text: string): string {
