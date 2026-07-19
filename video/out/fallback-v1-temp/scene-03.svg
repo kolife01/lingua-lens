@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+  <svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+    
+    <rect width="1920" height="1080" fill="#060907"/>
+    <text x="110" y="90" font-family="Menlo, Monaco, monospace" font-size="24" fill="#92ff5b">REVEAL</text>
+    <text x="110" y="190" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="102" font-weight="700" fill="#f4f7f1">LinguaLens</text>
+    <text x="116" y="276" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="36" font-weight="500" fill="#d8efe0">a coach that stays inside the conversation</text>
+    
+    <rect x="900" y="220" width="820" height="460" rx="230" ry="230" fill="none" stroke="#cfd9d3" stroke-width="10"/>
+    <rect x="870" y="442" width="120" height="16" rx="8" fill="#cfd9d3"/>
+    <rect x="1630" y="442" width="120" height="16" rx="8" fill="#cfd9d3"/>
+  
+    <image href="file:///Users/kt/code/even-g2/apps/lingua-lens/video/public/hud/hud-1.png" x="1090" y="320" width="440" height="220" preserveAspectRatio="none"/>
+  
+  </svg>

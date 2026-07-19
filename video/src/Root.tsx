@@ -1,9 +1,7 @@
 import React from 'react';
 import {Composition} from 'remotion';
 import {LinguaLensVideo} from './Video';
-import {fps, SCENES} from './script';
-
-const totalSeconds = SCENES[SCENES.length - 1]!.start + SCENES[SCENES.length - 1]!.duration;
+import {fps, totalSeconds} from './script';
 
 export const RemotionRoot: React.FC = () => {
   return (

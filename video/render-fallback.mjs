@@ -3,215 +3,376 @@ import {mkdirSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 
 const fps = 30;
+const width = 1920;
+const height = 1080;
 const durationSeconds = 165;
 
-const scenes = [
-  {id: 'title', start: 0, duration: 10},
-  {id: 'problem', start: 10, duration: 30},
-  {id: 'demo', start: 40, duration: 60},
-  {id: 'build', start: 100, duration: 40},
-  {id: 'closing', start: 140, duration: 25},
-];
+const sceneDurations = [18, 22, 12, 22, 12, 12, 2, 40, 17, 8];
+const audioOffsetsMs = [0, 18000, 40000, 52000, 100000, 140000];
 
 const narrationSections = [
   {
-    sceneId: 'title',
+    sceneStart: 0,
+    sceneDuration: 18,
     sentences: [
-      'This is LinguaLens, a quiet English coach on your glasses.',
-      'It helps in the hardest moment of conversation, the second when you want to keep speaking, but the words do not come out fast enough.',
+      'This is me, practicing English with GPT-Live.',
+      'I do this every morning.',
+      'And every morning, I hit this exact wall.',
     ],
   },
   {
-    sceneId: 'problem',
+    sceneStart: 18,
+    sceneDuration: 22,
     sentences: [
-      'I practice spoken English every day with GPT-Live, because it gives me real back and forth pressure, not just textbook drills.',
-      'The failure point is always the same.',
-      'I know the idea, but I stall on the phrasing.',
-      'If I look down at my phone to search for help, the conversation breaks immediately, and the learning moment is gone.',
-      'That made me ask a simple question.',
-      'What if the help stayed inside my line of sight, quiet enough to preserve the flow, but useful enough to keep me talking?',
+      'The phrase I need is almost there.',
+      "But it won't come out.",
+      'If I stop to check my phone, the conversation dies.',
+      "If I just move on, the phrase I couldn't say is gone forever.",
+      'The best learning moment of my day evaporates.',
+      'Every single day.',
     ],
   },
   {
-    sceneId: 'demo',
+    sceneStart: 40,
+    sceneDuration: 12,
     sentences: [
-      'So LinguaLens listens through Even G2, transcribes the exchange, and decides whether to stay silent or intervene.',
-      'The first card is HINT.',
-      'When I hesitate, the HUD offers one to three short English options, each paired with a tiny Japanese meaning label, so I can choose intent at a glance and keep speaking.',
-      'Next is WORD.',
-      'If my partner says a difficult term, LinguaLens shows the word with a very short plain English paraphrase.',
-      'Then comes silence.',
-      'That quiet screen is not a bug.',
-      'It is a product decision.',
-      'The model is explicitly allowed to do nothing, because over coaching would be just another distraction.',
-      'After a pause, LinguaLens brings back one missed expression as RECAP, so the conversation still turns into learning, even after the urgent moment has passed.',
-      'The whole flow is designed to be readable in about two seconds on a tiny monochrome HUD.',
+      'So I built a coach that lives right here, in my field of view.',
+      'This is LinguaLens, on Even G2 smart glasses.',
     ],
   },
   {
-    sceneId: 'build',
+    sceneStart: 52,
+    sceneDuration: 48,
     sentences: [
-      'Here is how we built it.',
-      'This codebase was implemented in Codex sessions from spec to working demo.',
-      'For models, we split the job by frequency and cost.',
-      'GPT-5.6 generates RECAP, where quality matters most.',
-      'gpt-5.6-luna handles the high frequency intervention decisions, because most windows should resolve cheaply to hint, word, or none.',
-      'gpt-4o-mini-transcribe handles speech recognition.',
-      'The hardware constraint mattered just as much as the model choice.',
-      'Bluetooth Low Energy bandwidth on the glasses pushed us toward one fixed page, mostly text, throttled updates, and a design that rewards restraint instead of visual noise.',
+      'The moment I stumble, LinguaLens hears it and hands me one to three complete phrases I can say right now, with a gloss in my own language.',
+      'I pick one.',
+      'I say it.',
+      'The conversation never stops.',
+      "When GPT-Live uses a word I don't know, a three-word gloss.",
+      "That's all.",
+      "And in the quiet moments, the phrase I couldn't say comes back as a review card.",
+      'It shows up again tomorrow.',
+      'The freeze becomes the lesson.',
+      'Most of the time, it shows nothing.',
+      'A good coach knows when to stay quiet.',
     ],
   },
   {
-    sceneId: 'closing',
+    sceneStart: 100,
+    sceneDuration: 40,
     sentences: [
-      'For judging, LinguaLens already ships with simulator support and a demo mode, so you can try the full HUD flow without glasses, a microphone, or an API key.',
-      'Next, I want to connect it even more tightly to GPT-Live practice mode, so the coaching loop becomes part of the daily speaking habit itself.',
-      'LinguaLens is a small idea with a narrow scope, but it solves a very real moment for language learners.',
-      'Thank you.',
+      'Why glasses?',
+      'A phone kills the conversation.',
+      'Audio would talk over it.',
+      'A silent HUD is the only interface that fits inside a conversation.',
+      'Every line of this app was written by Codex.',
+      'I directed, Codex coded.',
+      'The session logs are in the repo.',
+      'GPT-5.6 generates the review phrases.',
+      'Its fastest sibling, luna, makes the stay-quiet-or-help call in real time.',
+      'And the whole thing runs on a Bluetooth link so thin it forces honesty: text first, one image, nothing wasted.',
+    ],
+  },
+  {
+    sceneStart: 140,
+    sceneDuration: 25,
+    sentences: [
+      'You can try the full pipeline in two minutes, no glasses, no API key: the official simulator plays a scripted conversation, with the whole coaching loop live.',
+      'When the GPT-Live API opens, LinguaLens becomes its visual half.',
+      'GPT-Live does the talking.',
+      'LinguaLens does the catching.',
+      "LinguaLens. Full phrases when you're stuck. Silence when you're not.",
     ],
   },
 ];
 
 const cwd = process.cwd();
+const tmpDir = join(cwd, 'out', 'fallback-v1-temp');
 const captionsPath = join(cwd, 'captions.srt');
-const audioPath = join(cwd, 'public', 'narration.m4a');
-const outputPath = join(cwd, 'out', 'draft-v0.mp4');
-
-mkdirSync(join(cwd, 'out'), {recursive: true});
+const outputPath = join(cwd, 'out', 'draft-v1.mp4');
+mkdirSync(tmpDir, {recursive: true});
 
 writeFileSync(captionsPath, buildCaptions().map(toSrtCue).join('\n\n') + '\n', 'utf8');
 
+const hud = (name) => `file://${join(cwd, 'public', 'hud', name)}`;
+const images = [
+  ['scene-01.png', coldOpenSvg()],
+  ['scene-02.png', problemSvg()],
+  ['scene-03.png', revealSvg(hud('hud-1.png'))],
+  ['scene-04.png', coreDemoSvg(hud('hud-1.png'), 'HINT', 'One to three full phrases, right when the sentence stalls.')],
+  ['scene-05.png', coreDemoSvg(hud('hud-3.png'), 'WORD', 'A three-word gloss when GPT-Live says something new.')],
+  ['scene-06.png', coreDemoSvg(hud('hud-5.png'), 'RECAP', "The phrase that froze comes back after the pressure passes.")],
+  ['scene-07.png', coreDemoSvg(hud('hud-6.png'), 'QUIET', 'A good coach knows when to stay silent.')],
+  ['scene-08.png', buildSvg()],
+  ['scene-09.png', closeSvg(hud('hud-5.png'))],
+  ['scene-10.png', endCardSvg()],
+];
+
+for (const [fileName, svg] of images) {
+  const svgPath = join(tmpDir, fileName.replace('.png', '.svg'));
+  const pngPath = join(tmpDir, fileName);
+  writeFileSync(svgPath, svg, 'utf8');
+  execFileSync('rsvg-convert', ['-w', String(width), '-h', String(height), '-o', pngPath, svgPath], {stdio: 'inherit'});
+}
+
+const imageInputs = images.map(([fileName], index) => [
+  '-loop',
+  '1',
+  '-t',
+  String(sceneDurations[index]),
+  '-i',
+  join(tmpDir, fileName),
+]).flat();
+
+const concatInputs = images.map((_, index) => `[${index}:v]`).join('');
+const audioStart = images.length + 1;
 const filter = [
-  `drawbox=x=0:y=0:w=iw:h=ih:color=#07110d:t=fill:enable='between(t,0,10)'`,
-  `drawbox=x=0:y=0:w=iw:h=ih:color=#111912:t=fill:enable='between(t,10,40)'`,
-  `drawbox=x=0:y=0:w=iw:h=ih:color=#07110d:t=fill:enable='between(t,40,100)'`,
-  `drawbox=x=0:y=0:w=iw:h=ih:color=#10141f:t=fill:enable='between(t,100,140)'`,
-  `drawbox=x=0:y=0:w=iw:h=ih:color=#14130c:t=fill:enable='between(t,140,165)'`,
-
-  text('LINGUALENS', 110, 170, 130, '#f4f7f1', 0, 10),
-  text('a quiet English coach on your glasses', 116, 320, 54, '#d8f6ea', 0, 10),
-  text('Real-time conversation support without a phone lookup.', 120, 412, 34, '#9cb5a8', 0, 10),
-  `drawbox=x=1020:y=140:w=680:h=400:color=#c6d8cf:t=16:enable='between(t,0,10)'`,
-  `drawbox=x=1145:y=250:w=430:h=240:color=#050b07:t=fill:enable='between(t,0,10)'`,
-  text('HINT', 1190, 286, 36, '#93ff57', 0, 10),
-  text('Could we push the deadline?  締切延長', 1190, 350, 22, '#93ff57', 0, 10),
-  text('Friday is too tight.  金曜厳しい', 1190, 388, 22, '#93ff57', 0, 10),
-  text('We need more time.  時間必要', 1190, 426, 22, '#93ff57', 0, 10),
-
-  text('PROBLEM', 96, 70, 32, '#93ff57', 10, 40),
-  text('Conversation breaks at the worst moment', 96, 128, 60, '#f4f7f1', 10, 40),
-  text('Idea is clear', 126, 352, 34, '#78ffbf', 10, 40),
-  text('English phrasing stalls', 126, 438, 34, '#ffe48b', 10, 40),
-  text('Phone lookup breaks eye contact', 126, 524, 34, '#ff9e7d', 10, 40),
-  text('Learning moment disappears', 126, 610, 34, '#ff9e7d', 10, 40),
-  `drawbox=x=1200:y=250:w=480:h=670:color=#0c1110:t=fill:enable='between(t,10,40)'`,
-  `drawbox=x=1260:y=310:w=360:h=540:color=#161e1b:t=4:enable='between(t,10,40)'`,
-  text('Search for English phrase...', 1300, 380, 24, '#cdd7d1', 10, 40),
-  text('eyes down', 1340, 484, 34, '#7f978b', 10, 40),
-  text('turn lost', 1340, 540, 34, '#7f978b', 10, 40),
-  text('silence grows', 1296, 596, 34, '#7f978b', 10, 40),
-
-  text('CORE DEMO', 84, 70, 32, '#93ff57', 40, 100),
-  `drawbox=x=84:y=120:w=620:h=760:color=#111d18:t=fill:enable='between(t,40,100)'`,
-  text('Them  We need to iterate on the prototype.', 110, 180, 24, '#eef6f2', 40, 100),
-  text('You   Uh, I want say... we need more time.', 110, 272, 24, '#eef6f2', 40, 100),
-  text('Them  Is Friday a feasible deadline?', 110, 364, 24, '#eef6f2', 40, 100),
-  text('You   Friday is too tight for us.', 110, 456, 24, '#eef6f2', 40, 100),
-  text('Them  Which part is blocked?', 110, 548, 24, '#eef6f2', 40, 100),
-  text('You   The login flow and the risk.', 110, 640, 24, '#eef6f2', 40, 100),
-  `drawbox=x=760:y=120:w=1076:h=760:color=#101814:t=fill:enable='between(t,40,100)'`,
-  `drawbox=x=808:y=170:w=980:h=660:color=#09110d:t=10:enable='between(t,40,100)'`,
-  `drawbox=x=1010:y=360:w=622:h=311:color=#030805:t=fill:enable='between(t,40,100)'`,
-  `drawbox=x=1010:y=360:w=622:h=311:color=#4cae2a:t=2:enable='between(t,40,100)'`,
-  text('HINT', 1060, 396, 28, '#93ff57', 40, 67),
-  text('Could we push the deadline?  締切延長', 1084, 462, 20, '#93ff57', 40, 67),
-  text('Friday is too tight.  金曜厳しい', 1084, 498, 20, '#93ff57', 40, 67),
-  text('We need more time.  時間必要', 1084, 534, 20, '#93ff57', 40, 67),
-  text('WORD', 1060, 396, 28, '#93ff57', 67, 78),
-  text('stakeholder', 1084, 470, 26, '#93ff57', 67, 78),
-  text('decision maker', 1084, 512, 22, '#93ff57', 67, 78),
-  text('LISTEN', 1060, 396, 28, '#93ff57', 78, 87),
-  text('quiet HUD', 1084, 470, 26, '#93ff57', 78, 87),
-  text('no intervention', 1084, 512, 22, '#93ff57', 78, 87),
-  text('RECAP', 1060, 396, 28, '#93ff57', 87, 100),
-  text('one more round of user testing', 1084, 486, 22, '#93ff57', 87, 100),
-  text('576 x 288 monochrome HUD', 860, 800, 20, '#96b6a7', 40, 100),
-
-  text('HOW WE BUILT IT', 90, 70, 32, '#93ff57', 100, 140),
-  text('Codex built end to end', 90, 128, 58, '#f4f7f1', 100, 140),
-  text('GPT-5.6  recap generation', 118, 250, 28, '#eef6f2', 100, 140),
-  text('gpt-5.6-luna  high-frequency judge', 118, 348, 28, '#eef6f2', 100, 140),
-  text('gpt-4o-mini-transcribe  ASR', 118, 446, 28, '#eef6f2', 100, 140),
-  text('BLE bandwidth forced a text-first HUD', 118, 544, 28, '#eef6f2', 100, 140),
-  text('Even G2 mic', 1080, 202, 26, '#e3f3ea', 100, 140),
-  text('16 kHz PCM capture', 1080, 274, 26, '#e3f3ea', 100, 140),
-  text('transcript window', 1080, 346, 26, '#e3f3ea', 100, 140),
-  text('gpt-5.6-luna judge', 1080, 418, 26, '#e3f3ea', 100, 140),
-  text('gpt-5.6 recap', 1080, 490, 26, '#e3f3ea', 100, 140),
-  text('HUD renderer', 1080, 562, 26, '#e3f3ea', 100, 140),
-
-  text('CLOSING', 90, 70, 32, '#93ff57', 140, 165),
-  text('Judges can try it now', 90, 128, 64, '#f4f7f1', 140, 165),
-  text('simulator support  plus  demo mode', 98, 220, 34, '#9cb5a8', 140, 165),
-  text('npm run demo', 120, 333, 28, '#e3f3ea', 140, 165),
-  text('npm run simulator', 120, 421, 28, '#e3f3ea', 140, 165),
-  text('looped scripted HUD flow', 120, 509, 28, '#e3f3ea', 140, 165),
-  text('Roadmap  GPT-Live practice mode integration', 96, 622, 38, '#f0f6a5', 140, 165),
-  `drawbox=x=1030:y=190:w=720:h=560:color=#18160f:t=fill:enable='between(t,140,165)'`,
-  text('localhost 5173 ?demo=1&loop=1', 1070, 240, 24, '#9cb5a8', 140, 165),
-  `drawbox=x=1090:y=350:w=580:h=280:color=#030805:t=fill:enable='between(t,140,165)'`,
-  `drawbox=x=1090:y=350:w=580:h=280:color=#4cae2a:t=2:enable='between(t,140,165)'`,
-  text('RECAP', 1140, 392, 28, '#93ff57', 140, 165),
-  text('one more round of user testing', 1170, 460, 22, '#93ff57', 140, 165),
-
-  text('1920x1080  30fps  no BGM', 90, 1018, 18, '#7d9588', 0, 165),
-  text('LinguaLens demo draft v0', 1600, 1018, 18, '#7d9588', 0, 165),
-  `subtitles=${escapePath(captionsPath)}:force_style='FontName=Helvetica,FontSize=22,PrimaryColour=&H00F7FAF6,OutlineColour=&H64000000,BorderStyle=3,Outline=1,Shadow=0,MarginV=28,Alignment=2'`,
-].join(',');
+  `${concatInputs}concat=n=${images.length}:v=1:a=0[basev]`,
+  `[${audioStart}:a]adelay=${audioOffsetsMs[0]}|${audioOffsetsMs[0]}[a1]`,
+  `[${audioStart + 1}:a]adelay=${audioOffsetsMs[1]}|${audioOffsetsMs[1]}[a2]`,
+  `[${audioStart + 2}:a]adelay=${audioOffsetsMs[2]}|${audioOffsetsMs[2]}[a3]`,
+  `[${audioStart + 3}:a]adelay=${audioOffsetsMs[3]}|${audioOffsetsMs[3]}[a4]`,
+  `[${audioStart + 4}:a]adelay=${audioOffsetsMs[4]}|${audioOffsetsMs[4]}[a5]`,
+  `[${audioStart + 5}:a]adelay=${audioOffsetsMs[5]}|${audioOffsetsMs[5]}[a6]`,
+  `[${images.length}:a][a1][a2][a3][a4][a5][a6]amix=inputs=7:duration=longest:normalize=0[a]`,
+  `[basev]subtitles='${escapePath(captionsPath)}'[v]`,
+].join(';');
 
 execFileSync(
   'ffmpeg',
   [
     '-y',
+    ...imageInputs,
     '-f',
     'lavfi',
+    '-t',
+    String(durationSeconds),
     '-i',
-    `color=c=#050907:s=1920x1080:r=${fps}:d=${durationSeconds}`,
+    'anullsrc=channel_layout=mono:sample_rate=22050',
     '-i',
-    audioPath,
-    '-vf',
+    join(cwd, 'public', 'audio', 'narration-01.m4a'),
+    '-i',
+    join(cwd, 'public', 'audio', 'narration-02.m4a'),
+    '-i',
+    join(cwd, 'public', 'audio', 'narration-03.m4a'),
+    '-i',
+    join(cwd, 'public', 'audio', 'narration-04.m4a'),
+    '-i',
+    join(cwd, 'public', 'audio', 'narration-05.m4a'),
+    '-i',
+    join(cwd, 'public', 'audio', 'narration-06.m4a'),
+    '-filter_complex',
     filter,
     '-map',
-    '0:v',
+    '[v]',
     '-map',
-    '1:a',
-    '-c:v',
-    'libx264',
-    '-pix_fmt',
-    'yuv420p',
+    '[a]',
     '-r',
     String(fps),
+    '-pix_fmt',
+    'yuv420p',
+    '-c:v',
+    'libx264',
     '-c:a',
     'aac',
     '-b:a',
     '128k',
-    '-shortest',
+    '-t',
+    String(durationSeconds),
     outputPath,
   ],
   {stdio: 'inherit'},
 );
 
-function text(value, x, y, size, color, start, end) {
-  return `drawtext=font=Helvetica:text='${escapeText(value)}':fontsize=${size}:fontcolor=${color}:x=${x}:y=${y}:enable='between(t,${start},${end})'`;
+function coldOpenSvg() {
+  const bars = new Array(18)
+    .fill(null)
+    .map((_, index) => {
+      const x = 260 + index * 78;
+      const h = [180, 120, 210, 90, 240, 140][index % 6];
+      return rect(x, 350 - h / 2, 28, h, '#92ff5b', 1);
+    })
+    .join('');
+  return svg(`
+    <rect width="1920" height="1080" fill="#000000"/>
+    <text x="110" y="90" ${mono(24, '#88948d')}>COLD OPEN</text>
+    ${bars}
+    ${panel(110, 660, 1700, 250)}
+    <text x="160" y="720" ${sans(34, '#eef6f2')}>GPT-Live    So, what's blocking the release?</text>
+    <text x="160" y="795" ${sans(42, '#92ff5b', 700)}>Me          The login flow. Uh... I want say... えっと...</text>
+    <text x="1510" y="96" ${mono(22, '#ffe58d')}>freeze detected</text>
+  `);
+}
+
+function problemSvg() {
+  return svg(`
+    <rect width="1920" height="1080" fill="#070a08"/>
+    <text x="110" y="90" ${mono(24, '#92ff5b')}>THE PROBLEM</text>
+    <text x="110" y="176" ${sans(72, '#f4f7f1', 700)}>The best learning</text>
+    <text x="110" y="258" ${sans(72, '#f4f7f1', 700)}>moment disappears</text>
+    <text x="110" y="340" ${sans(72, '#f4f7f1', 700)}>in real time.</text>
+    ${pill(120, 390, 760, 72, 'The phrase is almost there.')}
+    ${pill(120, 485, 760, 72, 'Looking down kills the exchange.')}
+    ${pill(120, 580, 760, 72, 'Moving on erases the lesson.')}
+    ${panel(1120, 300, 620, 470)}
+    <text x="1180" y="375" ${sans(34, '#f4f7f1', 700)}>Phone lookup</text>
+    <text x="1230" y="470" ${sans(30, '#99aa9f')}>eyes down</text>
+    <text x="1230" y="530" ${sans(30, '#99aa9f')}>timing lost</text>
+    <text x="1230" y="590" ${sans(30, '#99aa9f')}>lesson gone</text>
+  `);
+}
+
+function revealSvg(hudHref) {
+  return svg(`
+    <rect width="1920" height="1080" fill="#060907"/>
+    <text x="110" y="90" ${mono(24, '#92ff5b')}>REVEAL</text>
+    <text x="110" y="190" ${sans(102, '#f4f7f1', 700)}>LinguaLens</text>
+    <text x="116" y="276" ${sans(36, '#d8efe0')}>a coach that stays inside the conversation</text>
+    ${glasses(900, 220, 820, 460)}
+    <image href="${hudHref}" x="1090" y="320" width="440" height="220" preserveAspectRatio="none"/>
+  `);
+}
+
+function coreDemoSvg(hudHref, tag, blurb) {
+  return svg(`
+    <rect width="1920" height="1080" fill="#050705"/>
+    <text x="110" y="90" ${mono(24, '#92ff5b')}>CORE DEMO</text>
+    ${panel(90, 170, 860, 700)}
+    ${panel(1010, 170, 820, 700)}
+    <text x="136" y="212" ${mono(20, '#99aa9f')}>left  HUD playback</text>
+    <text x="1056" y="212" ${mono(20, '#99aa9f')}>right  conversation subtitles</text>
+    ${glasses(104, 250, 832, 540)}
+    <image href="${hudHref}" x="180" y="310" width="680" height="340" preserveAspectRatio="none"/>
+    ${tagChip(140, 760, tag)}
+    <text x="140" y="840" ${sans(24, '#d6e2db')}>${escapeXml(blurb)}</text>
+    ${chat(1040, 270, 'GPT-Live', "So, what's blocking the release?")}
+    ${chat(1040, 360, 'Me', 'The login flow. Uh... I want say... えっと...', true)}
+    ${chat(1040, 490, 'GPT-Live', 'Is that timeline feasible?')}
+    ${chat(1040, 580, 'Me', 'Friday is too tight. We need more time before the review.')}
+    ${chat(1040, 710, 'GPT-Live', 'Which part of the risk is hardest to explain?')}
+    ${chat(1040, 800, 'Me', "I'm not sure how to explain the risk.")}
+  `);
+}
+
+function buildSvg() {
+  return svg(`
+    <rect width="1920" height="1080" fill="#07090a"/>
+    <text x="110" y="90" ${mono(24, '#92ff5b')}>WHY GLASSES / HOW IT'S BUILT</text>
+    ${card(90, 180, 540, 320, 'Why this interface', ['A phone kills the conversation.', 'Audio would talk over it.', 'A silent HUD fits inside the turn.'])}
+    ${card(690, 180, 540, 320, 'Codex + models', ['Codex wrote the app.', 'GPT-5.6 writes RECAP.', 'luna decides help or silence.'])}
+    ${card(1290, 180, 540, 320, 'BLE honesty', ['Text first.', 'One image.', 'Nothing wasted.'])}
+    ${panel(90, 560, 930, 250)}
+    <text x="126" y="674" ${sans(30, '#e5fbe9')}>Mic  →  ASR  →  Window  →  Judge  →  Hint/Word  →  Recap  →  HUD</text>
+    ${panel(1080, 560, 750, 250)}
+    <text x="1120" y="640" ${mono(28, '#92ff5b')}>session-logs/codex-*.md</text>
+    <text x="1120" y="700" ${mono(28, '#eef6f2')}>apps/lingua-lens</text>
+    <text x="1120" y="760" ${mono(28, '#eef6f2')}>video/NARRATION-v1.md</text>
+  `);
+}
+
+function closeSvg(hudHref) {
+  return svg(`
+    <rect width="1920" height="1080" fill="#060707"/>
+    <text x="110" y="90" ${mono(24, '#92ff5b')}>CLOSE</text>
+    ${panel(90, 180, 860, 650)}
+    ${panel(990, 180, 840, 650)}
+    <text x="136" y="226" ${mono(20, '#99aa9f')}>repository</text>
+    <text x="1036" y="226" ${mono(20, '#99aa9f')}>official simulator</text>
+    <text x="140" y="300" ${sans(34, '#f4f7f1', 700)}>github.com/kolife01/lingua-lens</text>
+    <text x="140" y="390" ${mono(28, '#92ff5b')}>README.md</text>
+    <text x="140" y="450" ${mono(28, '#eef6f2')}>apps/lingua-lens</text>
+    <text x="140" y="510" ${mono(28, '#eef6f2')}>video/</text>
+    <text x="140" y="570" ${mono(28, '#eef6f2')}>session-logs/</text>
+    <text x="1036" y="300" ${sans(32, '#f4f7f1', 700)}>localhost:5173/simulator</text>
+    <text x="1036" y="360" ${sans(28, '#99aa9f')}>no glasses, no API key</text>
+    <image href="${hudHref}" x="1200" y="420" width="520" height="260" preserveAspectRatio="none"/>
+  `);
+}
+
+function endCardSvg() {
+  return svg(`
+    <rect width="1920" height="1080" fill="#040505"/>
+    ${panel(260, 250, 1400, 560)}
+    <text x="620" y="430" ${sans(108, '#f4f7f1', 700)}>LinguaLens</text>
+    <text x="420" y="530" ${sans(38, '#d8efe0')}>Full phrases when you're stuck. Silence when you're not.</text>
+    <text x="610" y="610" ${mono(28, '#92ff5b')}>github.com/kolife01/lingua-lens</text>
+    <text x="700" y="668" ${sans(24, '#99aa9f')}>Built with Codex and GPT-5.6</text>
+  `);
+}
+
+function svg(inner) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+  <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+    ${inner}
+  </svg>`;
+}
+
+function panel(x, y, w, h) {
+  return rect(x, y, w, h, '#0d1210', 0.94);
+}
+
+function rect(x, y, w, h, fill, opacity = 1) {
+  return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="26" ry="26" fill="${fill}" fill-opacity="${opacity}"/>`;
+}
+
+function pill(x, y, w, h, label) {
+  return `${rect(x, y, w, h, '#151b18', 1)}<text x="${x + 24}" y="${y + 46}" ${sans(30, '#f4f7f1')}>${escapeXml(label)}</text>`;
+}
+
+function glasses(x, y, w, h) {
+  return `
+    <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="230" ry="230" fill="none" stroke="#cfd9d3" stroke-width="10"/>
+    <rect x="${x - 30}" y="${y + h / 2 - 8}" width="120" height="16" rx="8" fill="#cfd9d3"/>
+    <rect x="${x + w - 90}" y="${y + h / 2 - 8}" width="120" height="16" rx="8" fill="#cfd9d3"/>
+  `;
+}
+
+function tagChip(x, y, label) {
+  return `
+    <rect x="${x}" y="${y}" width="160" height="52" rx="26" fill="#111613" stroke="#92ff5b" stroke-width="2"/>
+    <text x="${x + 28}" y="${y + 34}" ${mono(26, '#92ff5b')}>${escapeXml(label)}</text>
+  `;
+}
+
+function chat(x, y, speaker, line, active = false) {
+  const h = speaker === 'Me' ? 104 : 74;
+  const lineColor = active ? '#92ff5b' : '#eef6f2';
+  return `
+    ${rect(x, y, 700, h, active ? '#18231a' : '#111613', 1)}
+    <text x="${x + 18}" y="${y + 22}" ${mono(18, '#99aa9f')}>${escapeXml(speaker)}</text>
+    <text x="${x + 18}" y="${y + 52}" ${sans(26, lineColor)}>${escapeXml(line)}</text>
+  `;
+}
+
+function card(x, y, w, h, title, lines) {
+  return `
+    ${panel(x, y, w, h)}
+    <text x="${x + 28}" y="${y + 46}" ${sans(34, '#f4f7f1', 700)}>${escapeXml(title)}</text>
+    ${lines
+      .map(
+        (line, index) => `
+          ${rect(x + 20, y + 90 + index * 70, w - 40, 52, '#151c18', 1)}
+          <text x="${x + 40}" y="${y + 125 + index * 70}" ${sans(24, '#eef6f2')}>${escapeXml(line)}</text>
+        `,
+      )
+      .join('')}
+  `;
+}
+
+function mono(size, color) {
+  return `font-family="Menlo, Monaco, monospace" font-size="${size}" fill="${color}"`;
+}
+
+function sans(size, color, weight = 500) {
+  return `font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="${size}" font-weight="${weight}" fill="${color}"`;
 }
 
 function buildCaptions() {
   return narrationSections
     .flatMap((section) => {
-      const scene = scenes.find((item) => item.id === section.sceneId);
-      const sectionStart = scene.start * fps;
-      const sectionFrames = scene.duration * fps;
-      const weights = section.sentences.map((sentence) => sentence.trim().split(/\s+/).length);
+      const sectionStart = section.sceneStart * fps;
+      const sectionFrames = section.sceneDuration * fps;
+      const weights = section.sentences.map((sentence) => Math.max(3, sentence.trim().split(/\s+/).length));
       const totalWeight = weights.reduce((sum, value) => sum + value, 0);
       let cursor = sectionStart;
       return section.sentences.map((sentence, index) => {
@@ -219,7 +380,7 @@ function buildCaptions() {
         const frames =
           index === section.sentences.length - 1
             ? remainingFrames
-            : Math.max(45, Math.round((sectionFrames * weights[index]) / totalWeight));
+            : Math.max(30, Math.round((sectionFrames * weights[index]) / totalWeight));
         const cue = {
           index: 0,
           startFrame: cursor,
@@ -239,23 +400,28 @@ function toSrtCue(cue) {
 
 function formatTime(seconds) {
   const totalMs = Math.round(seconds * 1000);
-  const hours = Math.floor(totalMs / 3600000);
-  const minutes = Math.floor((totalMs % 3600000) / 60000);
-  const secs = Math.floor((totalMs % 60000) / 1000);
   const ms = totalMs % 1000;
-  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
+  const totalSeconds = Math.floor(totalMs / 1000);
+  const s = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const m = totalMinutes % 60;
+  const h = Math.floor(totalMinutes / 60);
+  return `${pad(h)}:${pad(m)}:${pad(s)},${String(ms).padStart(3, '0')}`;
 }
 
-function escapeText(text) {
-  return text
-    .replace(/\\/g, '\\\\')
-    .replace(/:/g, '\\:')
-    .replace(/'/g, "\\\\'")
-    .replace(/,/g, '\\,')
-    .replace(/\[/g, '\\[')
-    .replace(/\]/g, '\\]');
+function pad(value) {
+  return String(value).padStart(2, '0');
 }
 
-function escapePath(filePath) {
-  return filePath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/,/g, '\\,');
+function escapeXml(value) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+}
+
+function escapePath(value) {
+  return value.replaceAll('\\', '\\\\').replaceAll(':', '\\:').replaceAll("'", "\\'");
 }

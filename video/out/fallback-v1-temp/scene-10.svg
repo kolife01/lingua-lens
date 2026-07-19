@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+  <svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+    
+    <rect width="1920" height="1080" fill="#040505"/>
+    <rect x="260" y="250" width="1400" height="560" rx="26" ry="26" fill="#0d1210" fill-opacity="0.94"/>
+    <text x="620" y="430" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="108" font-weight="700" fill="#f4f7f1">LinguaLens</text>
+    <text x="420" y="530" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="38" font-weight="500" fill="#d8efe0">Full phrases when you're stuck. Silence when you're not.</text>
+    <text x="610" y="610" font-family="Menlo, Monaco, monospace" font-size="28" fill="#92ff5b">github.com/kolife01/lingua-lens</text>
+    <text x="700" y="668" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="24" font-weight="500" fill="#99aa9f">Built with Codex and GPT-5.6</text>
+  
+  </svg>

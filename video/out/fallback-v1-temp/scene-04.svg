@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+  <svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+    
+    <rect width="1920" height="1080" fill="#050705"/>
+    <text x="110" y="90" font-family="Menlo, Monaco, monospace" font-size="24" fill="#92ff5b">CORE DEMO</text>
+    <rect x="90" y="170" width="860" height="700" rx="26" ry="26" fill="#0d1210" fill-opacity="0.94"/>
+    <rect x="1010" y="170" width="820" height="700" rx="26" ry="26" fill="#0d1210" fill-opacity="0.94"/>
+    <text x="136" y="212" font-family="Menlo, Monaco, monospace" font-size="20" fill="#99aa9f">left  HUD playback</text>
+    <text x="1056" y="212" font-family="Menlo, Monaco, monospace" font-size="20" fill="#99aa9f">right  conversation subtitles</text>
+    
+    <rect x="104" y="250" width="832" height="540" rx="230" ry="230" fill="none" stroke="#cfd9d3" stroke-width="10"/>
+    <rect x="74" y="512" width="120" height="16" rx="8" fill="#cfd9d3"/>
+    <rect x="846" y="512" width="120" height="16" rx="8" fill="#cfd9d3"/>
+  
+    <image href="file:///Users/kt/code/even-g2/apps/lingua-lens/video/public/hud/hud-1.png" x="180" y="310" width="680" height="340" preserveAspectRatio="none"/>
+    
+    <rect x="140" y="760" width="160" height="52" rx="26" fill="#111613" stroke="#92ff5b" stroke-width="2"/>
+    <text x="168" y="794" font-family="Menlo, Monaco, monospace" font-size="26" fill="#92ff5b">HINT</text>
+  
+    <text x="140" y="840" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="24" font-weight="500" fill="#d6e2db">One to three full phrases, right when the sentence stalls.</text>
+    
+    <rect x="1040" y="270" width="700" height="74" rx="26" ry="26" fill="#111613" fill-opacity="1"/>
+    <text x="1058" y="292" font-family="Menlo, Monaco, monospace" font-size="18" fill="#99aa9f">GPT-Live</text>
+    <text x="1058" y="322" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="26" font-weight="500" fill="#eef6f2">So, what&apos;s blocking the release?</text>
+  
+    
+    <rect x="1040" y="360" width="700" height="104" rx="26" ry="26" fill="#18231a" fill-opacity="1"/>
+    <text x="1058" y="382" font-family="Menlo, Monaco, monospace" font-size="18" fill="#99aa9f">Me</text>
+    <text x="1058" y="412" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="26" font-weight="500" fill="#92ff5b">The login flow. Uh... I want say... えっと...</text>
+  
+    
+    <rect x="1040" y="490" width="700" height="74" rx="26" ry="26" fill="#111613" fill-opacity="1"/>
+    <text x="1058" y="512" font-family="Menlo, Monaco, monospace" font-size="18" fill="#99aa9f">GPT-Live</text>
+    <text x="1058" y="542" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="26" font-weight="500" fill="#eef6f2">Is that timeline feasible?</text>
+  
+    
+    <rect x="1040" y="580" width="700" height="104" rx="26" ry="26" fill="#111613" fill-opacity="1"/>
+    <text x="1058" y="602" font-family="Menlo, Monaco, monospace" font-size="18" fill="#99aa9f">Me</text>
+    <text x="1058" y="632" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="26" font-weight="500" fill="#eef6f2">Friday is too tight. We need more time before the review.</text>
+  
+    
+    <rect x="1040" y="710" width="700" height="74" rx="26" ry="26" fill="#111613" fill-opacity="1"/>
+    <text x="1058" y="732" font-family="Menlo, Monaco, monospace" font-size="18" fill="#99aa9f">GPT-Live</text>
+    <text x="1058" y="762" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="26" font-weight="500" fill="#eef6f2">Which part of the risk is hardest to explain?</text>
+  
+    
+    <rect x="1040" y="800" width="700" height="104" rx="26" ry="26" fill="#111613" fill-opacity="1"/>
+    <text x="1058" y="822" font-family="Menlo, Monaco, monospace" font-size="18" fill="#99aa9f">Me</text>
+    <text x="1058" y="852" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="26" font-weight="500" fill="#eef6f2">I&apos;m not sure how to explain the risk.</text>
+  
+  
+  </svg>

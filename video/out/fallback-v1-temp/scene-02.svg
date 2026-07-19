@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+  <svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+    
+    <rect width="1920" height="1080" fill="#070a08"/>
+    <text x="110" y="90" font-family="Menlo, Monaco, monospace" font-size="24" fill="#92ff5b">THE PROBLEM</text>
+    <text x="110" y="176" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="72" font-weight="700" fill="#f4f7f1">The best learning</text>
+    <text x="110" y="258" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="72" font-weight="700" fill="#f4f7f1">moment disappears</text>
+    <text x="110" y="340" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="72" font-weight="700" fill="#f4f7f1">in real time.</text>
+    <rect x="120" y="390" width="760" height="72" rx="26" ry="26" fill="#151b18" fill-opacity="1"/><text x="144" y="436" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="30" font-weight="500" fill="#f4f7f1">The phrase is almost there.</text>
+    <rect x="120" y="485" width="760" height="72" rx="26" ry="26" fill="#151b18" fill-opacity="1"/><text x="144" y="531" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="30" font-weight="500" fill="#f4f7f1">Looking down kills the exchange.</text>
+    <rect x="120" y="580" width="760" height="72" rx="26" ry="26" fill="#151b18" fill-opacity="1"/><text x="144" y="626" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="30" font-weight="500" fill="#f4f7f1">Moving on erases the lesson.</text>
+    <rect x="1120" y="300" width="620" height="470" rx="26" ry="26" fill="#0d1210" fill-opacity="0.94"/>
+    <text x="1180" y="375" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="34" font-weight="700" fill="#f4f7f1">Phone lookup</text>
+    <text x="1230" y="470" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="30" font-weight="500" fill="#99aa9f">eyes down</text>
+    <text x="1230" y="530" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="30" font-weight="500" fill="#99aa9f">timing lost</text>
+    <text x="1230" y="590" font-family="'Avenir Next', Helvetica, Arial, sans-serif" font-size="30" font-weight="500" fill="#99aa9f">lesson gone</text>
+  
+  </svg>
