@@ -35,7 +35,7 @@ OpenAI Build Week 2026 提出作品（カテゴリ: Education）。締切: 2026-
 ```
 
 - SDK: `@evenrealities/even_hub_sdk`、テンプレートは `asr` ベース
-- モデル: コーチ判定・生成は **gpt-5.6**（Build Week 要件）。ASR は OpenAI の transcription API
+- モデル方針（コスト最小・オーナー決定・変更不可）: 高頻度の介入判定は **gpt-5.6-mini**（存在しない場合は最安の 5.6 系 mini/nano）、低頻度の RECAP 生成のみ **gpt-5.6** 本体（Build Week の「GPT-5.6 で構築」要件を満たすため最低1箇所は本体を使う）。ASR は最安の transcription モデル。モデル名はすべて設定値として一元管理し、コードに散らさない
 - API キー: 実行時に `OPENAI_API_KEY` を設定画面（初回起動セットアップ）で入力し localStorage 保存（レビュー要件: 再プロンプト禁止）
 
 ## HUD レイアウト & BLE 帯域予算（変更不可の制約）

@@ -1,45 +1,126 @@
-// Speech-to-text client for the G2 microphone.
-//
-// The G2 mic emits PCM s16le @ 16 kHz, mono via `bridge.audioControl(true)`.
-// Each onEvenHubEvent callback with `audioEvent.audioPcm` delivers a chunk.
-//
-// ─────────────────────────────────────────────────────────────────────
-// choose your own implementation here
-// ─────────────────────────────────────────────────────────────────────
-// Pick whichever STT provider you prefer — streaming or batch, hosted
-// or self-hosted — and implement the three functions below. The rest
-// of the scaffold (main.ts, ui.ts) already wires the mic into
-// `sendPcm` and renders whatever `onSnapshot` emits.
-//
-// Treat each snapshot as a full transcript state, not a delta:
-//   - finalText: text the provider is confident about
-//   - interimText: unstable tail that may still change
-//   - finished: true on the terminal message, after which no more
-//     snapshots will be emitted
-//
-// Don't forget to add a `network` permission to app.json with your
-// provider's hosts in the `whitelist` array once you wire this up.
-// `evenhub pack` rejects an empty whitelist, which is why the default
-// app.json omits the `network` entry entirely.
-// ─────────────────────────────────────────────────────────────────────
-
-export interface SttSnapshot {
-  finalText: string
-  interimText: string
-  finished: boolean
+export interface BatchTranscriberOptions {
+  apiKey: string
+  onTranscript: (text: string) => void | Promise<void>
+  onError?: (err: unknown) => void
 }
 
-export interface SttClient {
+export interface BatchTranscriber {
   sendPcm(chunk: Uint8Array): void
   close(): void
 }
 
-export function startSttStream(
-  _apiKey: string,
-  _onSnapshot: (snap: SttSnapshot) => void,
-  _onError?: (err: unknown) => void,
-): SttClient {
-  throw new Error(
-    'STT provider not implemented — open src/asr/stt.ts and wire up your chosen STT service.',
-  )
+const SAMPLE_RATE = 16000
+const CHANNEL_COUNT = 1
+const BITS_PER_SAMPLE = 16
+const FLUSH_INTERVAL_MS = 3200
+const MIN_BUFFER_BYTES = SAMPLE_RATE * 2
+
+export function createBatchTranscriber(options: BatchTranscriberOptions): BatchTranscriber {
+  const chunks: Uint8Array[] = []
+  let closed = false
+  let timer = window.setInterval(() => {
+    void flush(false)
+  }, FLUSH_INTERVAL_MS)
+  let inFlight = Promise.resolve()
+  let lastText = ''
+
+  function sendPcm(chunk: Uint8Array): void {
+    if (closed || chunk.byteLength === 0) return
+    chunks.push(new Uint8Array(chunk))
+  }
+
+  function close(): void {
+    closed = true
+    window.clearInterval(timer)
+    void flush(true)
+  }
+
+  async function flush(force: boolean): Promise<void> {
+    const size = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0)
+    if ((!force && size < MIN_BUFFER_BYTES) || size === 0) return
+    const pcm = mergeChunks(chunks.splice(0, chunks.length))
+    const wav = pcmToWav(pcm)
+    inFlight = inFlight.then(async () => {
+      try {
+        const text = await transcribeWav(options.apiKey, wav)
+        const normalized = text.replace(/\s+/g, ' ').trim()
+        if (!normalized || normalized === lastText) return
+        lastText = normalized
+        await options.onTranscript(normalized)
+      } catch (err) {
+        options.onError?.(err)
+      }
+    })
+    await inFlight
+  }
+
+  return {
+    sendPcm,
+    close,
+  }
+}
+
+async function transcribeWav(apiKey: string, wavBytes: Uint8Array): Promise<string> {
+  const form = new FormData()
+  form.append('model', 'gpt-4o-mini-transcribe')
+  const wavBuffer = new ArrayBuffer(wavBytes.byteLength)
+  new Uint8Array(wavBuffer).set(wavBytes)
+  form.append('file', new Blob([wavBuffer], { type: 'audio/wav' }), 'speech.wav')
+
+  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: form,
+  })
+
+  if (!response.ok) {
+    throw new Error(`OpenAI transcription failed: ${response.status}`)
+  }
+
+  const data = (await response.json()) as { text?: string }
+  return data.text ?? ''
+}
+
+function mergeChunks(chunks: Uint8Array[]): Uint8Array {
+  const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0)
+  const merged = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    merged.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return merged
+}
+
+function pcmToWav(pcmBytes: Uint8Array): Uint8Array {
+  const header = new ArrayBuffer(44)
+  const view = new DataView(header)
+  const byteRate = SAMPLE_RATE * CHANNEL_COUNT * (BITS_PER_SAMPLE / 8)
+  const blockAlign = CHANNEL_COUNT * (BITS_PER_SAMPLE / 8)
+  writeAscii(view, 0, 'RIFF')
+  view.setUint32(4, 36 + pcmBytes.byteLength, true)
+  writeAscii(view, 8, 'WAVE')
+  writeAscii(view, 12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, CHANNEL_COUNT, true)
+  view.setUint32(24, SAMPLE_RATE, true)
+  view.setUint32(28, byteRate, true)
+  view.setUint16(32, blockAlign, true)
+  view.setUint16(34, BITS_PER_SAMPLE, true)
+  writeAscii(view, 36, 'data')
+  view.setUint32(40, pcmBytes.byteLength, true)
+
+  const wav = new Uint8Array(44 + pcmBytes.byteLength)
+  wav.set(new Uint8Array(header), 0)
+  wav.set(pcmBytes, 44)
+  return wav
+}
+
+function writeAscii(view: DataView, offset: number, text: string): void {
+  for (let index = 0; index < text.length; index += 1) {
+    view.setUint8(offset + index, text.charCodeAt(index))
+  }
 }
