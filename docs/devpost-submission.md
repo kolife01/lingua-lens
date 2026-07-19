@@ -66,5 +66,5 @@ The core design value is **silence**: the model is explicitly allowed to decide 
 
 ## Submission-form extras
 
-- **Codex /feedback session ID**: (fill on submission day — session where the majority of core functionality was built; candidates recorded under ~/.codex/sessions/2026/07/19/, pick the M1 core-pipeline session and verify via `codex resume` + `/feedback`)
+- **Codex /feedback session ID**: primary candidate = `019f7a37-53d2-7120-b00d-c25b58adb788`（M1: コアパイプライン実装セッション、2026-07-19T20:51）。第2候補 = `019f7a82-1204-7503-bc9a-8a657dcea532`（M3-b: HINT 3択化ほか統合バッチ、22:12）。提出前に `codex resume 019f7a37-...` で開いて `/feedback` を実行し、表示される ID を転記する（/feedback が別 ID を発行する形式だった場合はそちらが正）。全11セッションは ~/.codex/sessions/2026/07/{19,20}/ に記録あり
 - **Testing note for judges**: no hardware needed; simulator demo mode requires no API key. For live mode, set your OpenAI API key in the in-app setup screen.

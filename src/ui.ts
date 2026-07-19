@@ -11,6 +11,10 @@ let sessionTurnsEl: HTMLDivElement
 let sessionCardEl: HTMLDivElement
 let sessionRestoreEl: HTMLDivElement
 let sessionRecapEl: HTMLDivElement
+let budgetLabelEl: HTMLDivElement
+let budgetSpentEl: HTMLDivElement
+let budgetRemainingEl: HTMLDivElement
+let budgetBarEl: HTMLDivElement
 let vadGateEl: HTMLDivElement
 let vadLevelEl: HTMLDivElement
 let vadWindowEl: HTMLDivElement
@@ -57,6 +61,21 @@ export function mountUi() {
               <div id="session-recap" class="signal-line signal-wide">Recap: --</div>
             </div>
           </article>
+          <article class="panel state-panel">
+            <header class="panel-head">
+              <h2>Daily Budget</h2>
+              <div id="budget-label" class="meta">$0.00 / $1.00</div>
+            </header>
+            <div class="budget-panel">
+              <div class="budget-track">
+                <div id="budget-bar" class="budget-fill"></div>
+              </div>
+              <div class="budget-row">
+                <div id="budget-spent" class="signal-line">Spent: $0.00</div>
+                <div id="budget-remaining" class="signal-line">Remaining: $1.00</div>
+              </div>
+            </div>
+          </article>
           <article class="panel signal-panel">
             <header class="panel-head">
               <h2>Signals</h2>
@@ -86,6 +105,10 @@ export function mountUi() {
   sessionCardEl = app.querySelector<HTMLDivElement>('#session-card')!
   sessionRestoreEl = app.querySelector<HTMLDivElement>('#session-restore')!
   sessionRecapEl = app.querySelector<HTMLDivElement>('#session-recap')!
+  budgetLabelEl = app.querySelector<HTMLDivElement>('#budget-label')!
+  budgetSpentEl = app.querySelector<HTMLDivElement>('#budget-spent')!
+  budgetRemainingEl = app.querySelector<HTMLDivElement>('#budget-remaining')!
+  budgetBarEl = app.querySelector<HTMLDivElement>('#budget-bar')!
   vadGateEl = app.querySelector<HTMLDivElement>('#vad-gate')!
   vadLevelEl = app.querySelector<HTMLDivElement>('#vad-level')!
   vadWindowEl = app.querySelector<HTMLDivElement>('#vad-window')!
@@ -161,6 +184,22 @@ export function setNodDebug(options: {
   nodHintEl.innerHTML = options.enabled
     ? 'Press <code>N</code> to simulate a nod in the simulator or demo.'
     : 'Add <code>?nod=1</code> to enable. Press <code>N</code> to simulate when enabled.'
+}
+
+export function setBudgetStatus(options: {
+  spentUsd: number
+  limitUsd: number
+  remainingUsd: number
+  reached: boolean
+}) {
+  if (!budgetLabelEl) return
+  const ratioUsed = options.limitUsd > 0 ? Math.min(1, options.spentUsd / options.limitUsd) : 1
+  budgetLabelEl.textContent = `${formatUsd(Math.min(options.spentUsd, options.limitUsd))} / ${formatUsd(options.limitUsd)}`
+  budgetSpentEl.textContent = `Spent: ${formatUsd(options.spentUsd)}`
+  budgetRemainingEl.textContent = `Remaining: ${formatUsd(options.remainingUsd)}`
+  budgetRemainingEl.className = `signal-line${options.reached ? ' budget-alert' : ''}`
+  budgetBarEl.style.width = `${Math.max(0, ratioUsed * 100)}%`
+  budgetBarEl.className = `budget-fill${options.reached ? ' budget-fill-limit' : ''}`
 }
 
 export function renderSetupScreen(options: { onSubmit: (value: string) => void | Promise<void> }) {
@@ -301,6 +340,37 @@ function injectStyles() {
       gap: 10px;
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+    .budget-panel {
+      display: grid;
+      gap: 14px;
+    }
+    .budget-track {
+      width: 100%;
+      height: 14px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.05);
+      overflow: hidden;
+    }
+    .budget-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent), var(--warm));
+      transition: width 180ms ease;
+    }
+    .budget-fill-limit {
+      background: linear-gradient(90deg, #ff9d95, #ffd38f);
+    }
+    .budget-row {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .budget-alert {
+      color: #ffb8b1;
+      border-color: #ff9d95;
+    }
     .signal-line {
       padding: 12px 14px;
       border-radius: 14px;
@@ -385,4 +455,8 @@ function injectStyles() {
   const style = document.createElement('style')
   style.textContent = css
   document.head.appendChild(style)
+}
+
+function formatUsd(value: number): string {
+  return `$${value.toFixed(2)}`
 }

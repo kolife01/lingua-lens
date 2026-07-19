@@ -1,8 +1,12 @@
 import { ASR_MODEL } from '../models'
+import type { TranscriptionUsageReport } from '../budget'
 
 export interface BatchTranscriberOptions {
   apiKey: string
   onTranscript: (text: string) => void | Promise<void>
+  onUsage?: (report: TranscriptionUsageReport) => void | Promise<void>
+  isRequestAllowed?: () => boolean | Promise<boolean>
+  onRequestBlocked?: () => void | Promise<void>
   onError?: (err: unknown) => void
   onVadDebug?: (info: { rms: number; threshold: number; forwarded: boolean; bufferedMs: number }) => void
   rmsThreshold?: number
@@ -66,7 +70,17 @@ export function createBatchTranscriber(options: BatchTranscriberOptions): BatchT
     const wav = pcmToWav(pcm)
     inFlight = inFlight.then(async () => {
       try {
+        const allowed = (await options.isRequestAllowed?.()) ?? true
+        if (!allowed) {
+          await options.onRequestBlocked?.()
+          return
+        }
+        const audioSeconds = pcm.byteLength / (CHANNEL_COUNT * (BITS_PER_SAMPLE / 8) * SAMPLE_RATE)
         const text = await transcribeWav(options.apiKey, wav)
+        await options.onUsage?.({
+          model: ASR_MODEL,
+          audioSeconds,
+        })
         const normalized = text.replace(/\s+/g, ' ').trim()
         if (!normalized || normalized === lastText) return
         lastText = normalized

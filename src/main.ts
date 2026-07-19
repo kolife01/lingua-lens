@@ -23,6 +23,7 @@ import {
 import {
   mountUi,
   renderSetupScreen,
+  setBudgetStatus,
   setEngineState,
   setHudCard,
   setSessionDebug,
@@ -40,6 +41,7 @@ import {
 } from './coach'
 import { createHudRenderer } from './hud'
 import { createBatchTranscriber } from './asr/stt'
+import { createDailyBudgetTracker, type BudgetSnapshot } from './budget'
 import {
   DEMO_LOOP_DURATION_MS,
   DEMO_SCRIPT,
@@ -48,6 +50,7 @@ import {
 import { createNodDetector, type ImuSample } from './nod'
 
 const bridge = await waitForEvenAppBridge()
+const budgetTracker = createDailyBudgetTracker(bridge)
 
 const PAGE_ID = 1
 const STATUS_ID = 1
@@ -57,6 +60,7 @@ const HERO_ID = 4
 
 const HERO_WIDTH = 200
 const HERO_HEIGHT = 100
+const ENV_API_KEY = import.meta.env.VITE_OPENAI_API_KEY?.trim() ?? ''
 
 const DEMO_PARAM = new URLSearchParams(window.location.search).get('demo')
 const MOCK_PARAM = new URLSearchParams(window.location.search).get('mock')
@@ -121,6 +125,7 @@ let nodImuRequested = false
 let backgroundSyncTimer: number | null = null
 let backgroundStatus = 'idle'
 let latestRestoredAt = 0
+let budgetSnapshot: BudgetSnapshot | null = null
 
 const backgroundBridge = createBackgroundSessionBridge(bridge)
 const unsubscribeBackgroundRestore = backgroundBridge.onRestore(state => {
@@ -211,7 +216,9 @@ async function initializePage(): Promise<void> {
 }
 
 async function boot(): Promise<void> {
-  apiKey = (await loadStoredApiKey(bridge)) ?? ''
+  budgetSnapshot = await budgetTracker.getSnapshot()
+  renderBudgetPanel()
+  apiKey = ENV_API_KEY || ((await loadStoredApiKey(bridge)) ?? '')
   lastSavedLog = await loadSessionLog(bridge)
   refreshSessionDebug()
 
@@ -271,7 +278,17 @@ async function enterSetup(): Promise<void> {
 async function startLive(restored?: BackgroundSessionState): Promise<void> {
   mode = 'live'
   shutdownStarted = false
-  coach = FORCE_MOCK ? createMockCoachEngine() : createCoachEngine(apiKey)
+  budgetSnapshot = await budgetTracker.getSnapshot()
+  renderBudgetPanel()
+  coach = FORCE_MOCK
+    ? createMockCoachEngine()
+    : createCoachEngine({
+        apiKey,
+        onUsage: async report => {
+          const nextSnapshot = await budgetTracker.recordResponseUsage(report)
+          await syncBudgetSnapshot(nextSnapshot)
+        },
+      })
   transcriptLog = restored ? restoreTranscriptEntries(restored.transcriptLog) : []
   activeCard = restored ? restoreCoachCard(restored.activeCard) : { type: 'NONE', text: '', ttl_ms: 0, choices: [] }
   activeCardDisplayText = ''
@@ -283,7 +300,10 @@ async function startLive(restored?: BackgroundSessionState): Promise<void> {
   demoLoopIndex = 0
   demoInjectedCount = 0
   demoHeartbeatStartAt = 0
-  setEngineState('listening', FORCE_MOCK ? 'Live mic · mock coach' : 'Live mic · OpenAI coach')
+  setEngineState(
+    budgetSnapshot?.reached ? 'error' : 'listening',
+    budgetSnapshot?.reached ? 'Daily budget reached' : FORCE_MOCK ? 'Live mic · mock coach' : 'Live mic · OpenAI coach',
+  )
   if (restored) {
     lastSavedLog = restored.learningLog
   }
@@ -299,12 +319,15 @@ async function startLive(restored?: BackgroundSessionState): Promise<void> {
     })
   } else {
     await hud.renderIdle(
-      'LIVE',
+      budgetSnapshot?.reached ? 'Daily budget reached' : 'LIVE',
       'Listening…',
-      FORCE_MOCK ? 'Mock coach active' : 'GPT coach active',
+      budgetSnapshot?.reached ? `Remaining ${formatUsd(budgetSnapshot.remainingUsd)}` : FORCE_MOCK ? 'Mock coach active' : 'GPT coach active',
       'LIVE',
     )
     setHudCard('NONE', 'No intervention')
+  }
+  if (budgetSnapshot?.reached) {
+    await announceBudgetReached()
   }
 
   const transcriber = createBatchTranscriber({
@@ -316,6 +339,19 @@ async function startLive(restored?: BackgroundSessionState): Promise<void> {
     },
     onVadDebug: info => {
       setVadDebug(info)
+    },
+    isRequestAllowed: async () => {
+      const snapshot = await budgetTracker.getSnapshot()
+      budgetSnapshot = snapshot
+      renderBudgetPanel()
+      return !snapshot.reached
+    },
+    onRequestBlocked: async () => {
+      await announceBudgetReached()
+    },
+    onUsage: async report => {
+      const nextSnapshot = await budgetTracker.recordTranscriptionUsage(report)
+      await syncBudgetSnapshot(nextSnapshot)
     },
     onError: err => {
       console.error('ASR error:', err)
@@ -339,7 +375,9 @@ async function startLive(restored?: BackgroundSessionState): Promise<void> {
 async function startDemo(restored?: BackgroundSessionState): Promise<void> {
   mode = 'demo'
   shutdownStarted = false
-  coach = apiKey && !FORCE_MOCK ? createCoachEngine(apiKey) : createMockCoachEngine()
+  budgetSnapshot = await budgetTracker.getSnapshot()
+  renderBudgetPanel()
+  coach = apiKey && !FORCE_MOCK ? createCoachEngine({ apiKey }) : createMockCoachEngine()
   transcriptLog = restored ? restoreTranscriptEntries(restored.transcriptLog) : []
   activeCard = restored ? restoreCoachCard(restored.activeCard) : { type: 'NONE', text: '', ttl_ms: 0, choices: [] }
   activeCardDisplayText = ''
@@ -468,6 +506,7 @@ async function registerTranscript(role: TranscriptRole, text: string, fromDemo: 
 
   const currentCoach = coach
   if (!currentCoach) return
+  if (!fromDemo && !FORCE_MOCK && !(await canStartLiveApiCall())) return
 
   try {
     const decision = await currentCoach.decide({
@@ -511,7 +550,10 @@ async function renderQuiet(status: string): Promise<void> {
   activeCard = { type: 'NONE', text: '', ttl_ms: 0, choices: [] }
   activeCardDisplayText = ''
   activeCardShownAt = 0
-  await hud.renderQuiet(status)
+  await hud.renderQuiet(getHudStatusLabel(status))
+  if (mode === 'live' && budgetSnapshot?.reached) {
+    await hud.renderStatus('Daily budget reached', `Remaining ${formatUsd(budgetSnapshot.remainingUsd)}`)
+  }
   setHudCard('NONE', 'No intervention')
   refreshSessionDebug()
   scheduleBackgroundSync()
@@ -545,6 +587,7 @@ async function triggerRecap(fromDemo: boolean): Promise<void> {
   if (recapInFlight || !coach || transcriptLog.length === 0) return
   const lastEntry = transcriptLog[transcriptLog.length - 1]
   if (!lastEntry || lastEntry.text.startsWith('[RECAP] ')) return
+  if (!fromDemo && !FORCE_MOCK && !(await canStartLiveApiCall())) return
 
   recapInFlight = true
   try {
@@ -690,6 +733,45 @@ function refreshSessionDebug(): void {
     backgroundStatus,
     lastRecap: findLatestRecapText() ?? '',
   })
+}
+
+async function canStartLiveApiCall(): Promise<boolean> {
+  if (mode !== 'live') return true
+  const snapshot = await budgetTracker.getSnapshot()
+  budgetSnapshot = snapshot
+  renderBudgetPanel()
+  if (!snapshot.reached) return true
+  await announceBudgetReached()
+  return false
+}
+
+async function syncBudgetSnapshot(nextSnapshot: BudgetSnapshot): Promise<void> {
+  budgetSnapshot = nextSnapshot
+  renderBudgetPanel()
+  if (mode === 'live' && nextSnapshot.reached) {
+    await announceBudgetReached()
+  }
+}
+
+async function announceBudgetReached(): Promise<void> {
+  if (!budgetSnapshot?.reached || mode !== 'live') return
+  setEngineState('error', 'Daily budget reached')
+  await hud.renderStatus('Daily budget reached', `Remaining ${formatUsd(budgetSnapshot.remainingUsd)}`)
+}
+
+function renderBudgetPanel(): void {
+  if (!budgetSnapshot) return
+  setBudgetStatus({
+    spentUsd: budgetSnapshot.spentUsd,
+    limitUsd: budgetSnapshot.limitUsd,
+    remainingUsd: budgetSnapshot.remainingUsd,
+    reached: budgetSnapshot.reached,
+  })
+}
+
+function getHudStatusLabel(fallback: string): string {
+  if (mode === 'live' && budgetSnapshot?.reached) return 'Daily budget reached'
+  return fallback
 }
 
 function buildBackgroundSnapshot(): BackgroundSessionState {
@@ -839,4 +921,8 @@ function parseBackgroundPayload(raw: string | undefined): BackgroundSessionState
   } catch {
     return null
   }
+}
+
+function formatUsd(value: number): string {
+  return `$${value.toFixed(2)}`
 }

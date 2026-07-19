@@ -1,4 +1,5 @@
 import { INTERVENTION_MODEL, RECAP_MODEL } from './models'
+import type { ResponseUsageReport } from './budget'
 
 export type CoachType = 'HINT' | 'WORD' | 'RECAP' | 'NONE'
 
@@ -29,6 +30,11 @@ export interface CoachContext {
 export interface CoachEngine {
   decide(context: CoachContext): Promise<CoachDecision>
   createRecap(transcriptWindow: TranscriptTurn[]): Promise<CoachDecision>
+}
+
+export interface CoachEngineOptions {
+  apiKey: string
+  onUsage?: (report: ResponseUsageReport) => void | Promise<void>
 }
 
 const COACH_SCHEMA = {
@@ -92,7 +98,9 @@ const RECAP_SCHEMA = {
   },
 } as const
 
-export function createCoachEngine(apiKey: string): CoachEngine {
+export function createCoachEngine(options: CoachEngineOptions): CoachEngine {
+  const { apiKey, onUsage } = options
+
   return {
     async decide(context: CoachContext): Promise<CoachDecision> {
       const response = await fetch('https://api.openai.com/v1/responses', {
@@ -143,7 +151,13 @@ export function createCoachEngine(apiKey: string): CoachEngine {
         throw new Error(`OpenAI coach failed: ${response.status}`)
       }
 
-      const parsed = JSON.parse(await readOutputText(response)) as CoachDecision
+      const payload = await readResponsePayload(response)
+      await onUsage?.({
+        model: INTERVENTION_MODEL,
+        inputTokens: payload.usage?.input_tokens ?? 0,
+        outputTokens: payload.usage?.output_tokens ?? 0,
+      })
+      const parsed = JSON.parse(readOutputText(payload)) as CoachDecision
       const decision = sanitizeDecision(parsed)
       return decision.type === 'RECAP' ? NONE : decision
     },
@@ -196,7 +210,13 @@ export function createCoachEngine(apiKey: string): CoachEngine {
         throw new Error(`OpenAI recap failed: ${response.status}`)
       }
 
-      const parsed = JSON.parse(await readOutputText(response)) as { text: string; ttl_ms: number }
+      const payload = await readResponsePayload(response)
+      await onUsage?.({
+        model: RECAP_MODEL,
+        inputTokens: payload.usage?.input_tokens ?? 0,
+        outputTokens: payload.usage?.output_tokens ?? 0,
+      })
+      const parsed = JSON.parse(readOutputText(payload)) as { text: string; ttl_ms: number }
       return sanitizeDecision({
         type: 'RECAP',
         text: parsed.text,
@@ -314,17 +334,25 @@ function hintTtlMsFromChoices(choiceCount: number): number {
   return 5000
 }
 
-async function readOutputText(response: Response): Promise<string> {
-  const data = (await response.json()) as {
-    output_text?: string
-    output?: Array<{
-      content?: Array<{
-        type?: string
-        text?: string
-      }>
+interface ResponsesPayload {
+  output_text?: string
+  output?: Array<{
+    content?: Array<{
+      type?: string
+      text?: string
     }>
+  }>
+  usage?: {
+    input_tokens?: number
+    output_tokens?: number
   }
+}
 
+async function readResponsePayload(response: Response): Promise<ResponsesPayload> {
+  return (await response.json()) as ResponsesPayload
+}
+
+function readOutputText(data: ResponsesPayload): string {
   return (
     data.output_text ??
     data.output?.flatMap(item => item.content ?? []).find(item => item.type === 'output_text')?.text ??

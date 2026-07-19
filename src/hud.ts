@@ -50,6 +50,13 @@ export function createHudRenderer(options: HudRendererOptions) {
     queueImage(type)
   }
 
+  async function renderStatus(status: string, aux?: string): Promise<void> {
+    queueText('status', status)
+    if (typeof aux === 'string') {
+      queueText('aux', aux)
+    }
+  }
+
   function queueText(kind: keyof typeof lastTexts, value: string): void {
     lastTexts[kind] = value
     const waitMs = Math.max(0, TEXT_MIN_INTERVAL_MS - (Date.now() - lastTextAt))
@@ -122,5 +129,6 @@ export function createHudRenderer(options: HudRendererOptions) {
     renderIdle,
     renderQuiet,
     renderCard,
+    renderStatus,
   }
 }
