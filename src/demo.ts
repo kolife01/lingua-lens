@@ -6,9 +6,9 @@ export interface DemoItem {
 
 export const DEMO_SCRIPT: DemoItem[] = [
   { atMs: 800, role: 'partner', text: 'We need to iterate on the prototype before the stakeholder review.' },
-  { atMs: 4200, role: 'speaker', text: 'Uh, I want say... we need more time to test it.' },
+  { atMs: 4200, role: 'speaker', text: 'Uh, I want say... we need more time before the review.' },
   { atMs: 8200, role: 'partner', text: 'Is Friday a feasible deadline for your team?' },
-  { atMs: 12200, role: 'speaker', text: 'Maybe... ano... not Friday.' },
+  { atMs: 12200, role: 'speaker', text: 'Maybe... ano... Friday is too tight for us.' },
   { atMs: 16800, role: 'partner', text: 'Okay. Which part is blocked right now?' },
   { atMs: 20800, role: 'speaker', text: 'The login flow. I am not sure how to explain the risk.' },
   { atMs: 34800, role: 'partner', text: 'Take your time.' },

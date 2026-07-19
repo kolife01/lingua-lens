@@ -2,10 +2,16 @@ import { INTERVENTION_MODEL, RECAP_MODEL } from './models'
 
 export type CoachType = 'HINT' | 'WORD' | 'RECAP' | 'NONE'
 
+export interface HintChoice {
+  english: string
+  label: string
+}
+
 export interface CoachDecision {
   type: CoachType
   text: string
   ttl_ms: number
+  choices: HintChoice[]
 }
 
 export interface TranscriptTurn {
@@ -31,7 +37,7 @@ const COACH_SCHEMA = {
   schema: {
     type: 'object',
     additionalProperties: false,
-    required: ['type', 'text', 'ttl_ms'],
+    required: ['type', 'text', 'ttl_ms', 'choices'],
     properties: {
       type: {
         type: 'string',
@@ -44,6 +50,23 @@ const COACH_SCHEMA = {
         type: 'integer',
         minimum: 3500,
         maximum: 6000,
+      },
+      choices: {
+        type: 'array',
+        maxItems: 3,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['english', 'label'],
+          properties: {
+            english: {
+              type: 'string',
+            },
+            label: {
+              type: 'string',
+            },
+          },
+        },
       },
     },
   },
@@ -87,7 +110,7 @@ export function createCoachEngine(apiKey: string): CoachEngine {
                 {
                   type: 'input_text',
                   text:
-                    'You are LinguaLens, a restrained English conversation coach for smart glasses. Return JSON only. Favor NONE unless a short intervention is clearly useful. HINT gives only the first two English words plus ellipsis, not full answers. WORD gives one difficult word plus a simple paraphrase of at most 3 words. Never emit RECAP here. Keep text readable within 2 seconds.',
+                    'You are LinguaLens, a restrained English conversation coach for smart glasses. Return JSON only. Favor NONE unless a short intervention is clearly useful. Never emit RECAP here. HINT must return 1 to 3 choices in choices[]. Each choice needs english and label. english must be a complete line the speaker can say immediately, at most 6 words. label must be a short Japanese meaning label, 3 to 8 characters. Do not include numbering or separators inside english or label; the UI adds those. If context is very clear, return 1 choice. If ambiguous, return up to 3 choices. For HINT set text to an empty string or a very short summary. WORD gives one difficult word plus a simple paraphrase of at most 3 words in text and must use choices:[]. NONE must use choices:[]. Keep output readable within 2 seconds.',
                 },
               ],
             },
@@ -178,6 +201,7 @@ export function createCoachEngine(apiKey: string): CoachEngine {
         type: 'RECAP',
         text: parsed.text,
         ttl_ms: parsed.ttl_ms,
+        choices: [],
       })
     },
   }
@@ -193,8 +217,12 @@ export function createMockCoachEngine(): CoachEngine {
       if (last.role === 'speaker' && /(eto|ano|uh|um|なんだっけ|わたしは|i want say)/.test(text)) {
         return {
           type: 'HINT',
-          text: 'You could…',
-          ttl_ms: 3500,
+          text: '',
+          ttl_ms: 5500,
+          choices: [
+            { english: 'Could we push the deadline?', label: '締切延長' },
+            { english: 'Friday is too tight.', label: '金曜厳しい' },
+          ],
         }
       }
       if (last.role === 'partner' && /(deadline|iterate|prototype|stakeholder|feasible)/.test(text)) {
@@ -202,6 +230,7 @@ export function createMockCoachEngine(): CoachEngine {
           type: 'WORD',
           text: pickWord(last.text),
           ttl_ms: 4000,
+          choices: [],
         }
       }
       return NONE
@@ -216,6 +245,7 @@ export function createMockCoachEngine(): CoachEngine {
         type: 'RECAP',
         text: recentSpeaker ? `Try: ${toMockRecap(recentSpeaker.text)}` : 'Try: Let me think for a second.',
         ttl_ms: 5000,
+        choices: [],
       }
     },
   }
@@ -225,18 +255,63 @@ const NONE: CoachDecision = {
   type: 'NONE',
   text: '',
   ttl_ms: 0,
+  choices: [],
 }
 
 function sanitizeDecision(value: CoachDecision): CoachDecision {
   if (!value || !['HINT', 'WORD', 'RECAP', 'NONE'].includes(value.type)) return NONE
   const text = typeof value.text === 'string' ? value.text.trim().slice(0, 80) : ''
   const ttl_ms = Number.isFinite(value.ttl_ms) ? Math.max(3500, Math.min(6000, value.ttl_ms)) : 0
-  if (value.type === 'NONE' || !text) return NONE
+  const choices = Array.isArray(value.choices) ? value.choices.map(sanitizeChoice).filter(Boolean) as HintChoice[] : []
+  if (value.type === 'NONE') return NONE
+  if (value.type === 'HINT') {
+    if (choices.length === 0) return NONE
+    return {
+      type: 'HINT',
+      text: '',
+      ttl_ms: hintTtlMsFromChoices(choices.length),
+      choices,
+    }
+  }
+  if (!text) return NONE
   return {
     type: value.type,
     text,
     ttl_ms: ttl_ms || 3500,
+    choices: [],
   }
+}
+
+function sanitizeChoice(value: unknown): HintChoice | null {
+  if (!value || typeof value !== 'object') return null
+  const record = value as { english?: string; label?: string }
+  const english = normalizeHintEnglish(record.english ?? '')
+  const label = normalizeHintLabel(record.label ?? '')
+  if (!english || !label) return null
+  return { english, label }
+}
+
+function normalizeHintEnglish(text: string): string {
+  const words = text
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 6)
+  return words.join(' ').slice(0, 56)
+}
+
+function normalizeHintLabel(text: string): string {
+  const compact = text.replace(/\s+/g, '').trim()
+  const chars = Array.from(compact).slice(0, 8)
+  if (chars.length < 3) return ''
+  return chars.join('')
+}
+
+function hintTtlMsFromChoices(choiceCount: number): number {
+  if (choiceCount >= 3) return 6000
+  if (choiceCount === 2) return 5500
+  return 5000
 }
 
 async function readOutputText(response: Response): Promise<string> {

@@ -4,6 +4,8 @@ export interface BatchTranscriberOptions {
   apiKey: string
   onTranscript: (text: string) => void | Promise<void>
   onError?: (err: unknown) => void
+  onVadDebug?: (info: { rms: number; threshold: number; forwarded: boolean; bufferedMs: number }) => void
+  rmsThreshold?: number
 }
 
 export interface BatchTranscriber {
@@ -16,10 +18,12 @@ const CHANNEL_COUNT = 1
 const BITS_PER_SAMPLE = 16
 const FLUSH_INTERVAL_MS = 3200
 const MIN_BUFFER_BYTES = SAMPLE_RATE * 2
+const DEFAULT_RMS_THRESHOLD = 0.012
 
 export function createBatchTranscriber(options: BatchTranscriberOptions): BatchTranscriber {
   const chunks: Uint8Array[] = []
   let closed = false
+  const rmsThreshold = options.rmsThreshold ?? DEFAULT_RMS_THRESHOLD
   let timer = window.setInterval(() => {
     void flush(false)
   }, FLUSH_INTERVAL_MS)
@@ -42,6 +46,23 @@ export function createBatchTranscriber(options: BatchTranscriberOptions): BatchT
     const size = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0)
     if ((!force && size < MIN_BUFFER_BYTES) || size === 0) return
     const pcm = mergeChunks(chunks.splice(0, chunks.length))
+    const rms = computeNormalizedRms(pcm)
+    const bufferedMs = Math.round((pcm.byteLength / (CHANNEL_COUNT * (BITS_PER_SAMPLE / 8) * SAMPLE_RATE)) * 1000)
+    if (rms < rmsThreshold) {
+      options.onVadDebug?.({
+        rms,
+        threshold: rmsThreshold,
+        forwarded: false,
+        bufferedMs,
+      })
+      return
+    }
+    options.onVadDebug?.({
+      rms,
+      threshold: rmsThreshold,
+      forwarded: true,
+      bufferedMs,
+    })
     const wav = pcmToWav(pcm)
     inFlight = inFlight.then(async () => {
       try {
@@ -95,6 +116,20 @@ function mergeChunks(chunks: Uint8Array[]): Uint8Array {
     offset += chunk.byteLength
   }
   return merged
+}
+
+function computeNormalizedRms(pcmBytes: Uint8Array): number {
+  if (pcmBytes.byteLength < 2) return 0
+  const view = new DataView(pcmBytes.buffer, pcmBytes.byteOffset, pcmBytes.byteLength)
+  let sum = 0
+  let sampleCount = 0
+  for (let offset = 0; offset + 1 < pcmBytes.byteLength; offset += 2) {
+    const sample = view.getInt16(offset, true) / 32768
+    sum += sample * sample
+    sampleCount += 1
+  }
+  if (sampleCount === 0) return 0
+  return Math.sqrt(sum / sampleCount)
 }
 
 function pcmToWav(pcmBytes: Uint8Array): Uint8Array {

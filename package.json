@@ -13,7 +13,7 @@
     "simulator": "node node_modules/@evenrealities/evenhub-simulator/bin/index.js 'http://localhost:5173/?demo=1' --automation-port 9222"
   },
   "dependencies": {
-    "@evenrealities/even_hub_sdk": "^0.0.10"
+    "@evenrealities/even_hub_sdk": "^0.0.12"
   },
   "devDependencies": {
     "@evenrealities/evenhub-cli": "^0.1.12",

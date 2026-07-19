@@ -6,6 +6,18 @@ let metaEl: HTMLDivElement
 let transcriptEl: HTMLPreElement
 let cardEl: HTMLDivElement
 let formHostEl: HTMLDivElement
+let sessionModeEl: HTMLDivElement
+let sessionTurnsEl: HTMLDivElement
+let sessionCardEl: HTMLDivElement
+let sessionRestoreEl: HTMLDivElement
+let sessionRecapEl: HTMLDivElement
+let vadGateEl: HTMLDivElement
+let vadLevelEl: HTMLDivElement
+let vadWindowEl: HTMLDivElement
+let nodStateEl: HTMLDivElement
+let nodPitchEl: HTMLDivElement
+let nodCountEl: HTMLDivElement
+let nodHintEl: HTMLDivElement
 
 export function mountUi() {
   const app = document.querySelector<HTMLDivElement>('#app')!
@@ -15,7 +27,7 @@ export function mountUi() {
         <p class="eyebrow">Even G2 conversation coach</p>
         <h1>LinguaLens</h1>
         <div id="status" class="status status-connecting">Booting…</div>
-        <p class="lead">HUD-safe coaching cards for English conversations. Demo mode can bypass ASR and still exercise the full pipeline.</p>
+        <p class="lead">Live English coaching for HUD playback, with transcript context, background restore, and simulator-safe debug panels.</p>
         <div id="form-host"></div>
       </section>
       <section class="grid">
@@ -26,12 +38,40 @@ export function mountUi() {
           </header>
           <pre id="transcript" class="transcript"></pre>
         </article>
-        <article class="panel card-panel">
-          <header class="panel-head">
-            <h2>HUD Card</h2>
-          </header>
-          <div id="card" class="hud-card hud-none">No intervention</div>
-        </article>
+        <section class="side-stack">
+          <article class="panel card-panel">
+            <header class="panel-head">
+              <h2>HUD Preview</h2>
+            </header>
+            <div id="card" class="hud-card hud-none">No intervention</div>
+          </article>
+          <article class="panel state-panel">
+            <header class="panel-head">
+              <h2>Session State</h2>
+            </header>
+            <div class="signal-grid">
+              <div id="session-mode" class="signal-line">Mode: --</div>
+              <div id="session-turns" class="signal-line">Turns: 0</div>
+              <div id="session-card" class="signal-line">Card: NONE</div>
+              <div id="session-restore" class="signal-line">Restore: idle</div>
+              <div id="session-recap" class="signal-line signal-wide">Recap: --</div>
+            </div>
+          </article>
+          <article class="panel signal-panel">
+            <header class="panel-head">
+              <h2>Signals</h2>
+            </header>
+            <div class="signal-grid">
+              <div id="vad-gate" class="signal-line">VAD: waiting</div>
+              <div id="vad-level" class="signal-line">RMS: -- / --</div>
+              <div id="vad-window" class="signal-line">Window: --</div>
+              <div id="nod-state" class="signal-line">Nod: off</div>
+              <div id="nod-pitch" class="signal-line">Pitch: --</div>
+              <div id="nod-count" class="signal-line">Detected: 0</div>
+              <div id="nod-hint" class="nod-hint signal-wide">Add <code>?nod=1</code> to enable. Press <code>N</code> to simulate when enabled.</div>
+            </div>
+          </article>
+        </section>
       </section>
     </main>
   `
@@ -41,6 +81,18 @@ export function mountUi() {
   transcriptEl = app.querySelector<HTMLPreElement>('#transcript')!
   cardEl = app.querySelector<HTMLDivElement>('#card')!
   formHostEl = app.querySelector<HTMLDivElement>('#form-host')!
+  sessionModeEl = app.querySelector<HTMLDivElement>('#session-mode')!
+  sessionTurnsEl = app.querySelector<HTMLDivElement>('#session-turns')!
+  sessionCardEl = app.querySelector<HTMLDivElement>('#session-card')!
+  sessionRestoreEl = app.querySelector<HTMLDivElement>('#session-restore')!
+  sessionRecapEl = app.querySelector<HTMLDivElement>('#session-recap')!
+  vadGateEl = app.querySelector<HTMLDivElement>('#vad-gate')!
+  vadLevelEl = app.querySelector<HTMLDivElement>('#vad-level')!
+  vadWindowEl = app.querySelector<HTMLDivElement>('#vad-window')!
+  nodStateEl = app.querySelector<HTMLDivElement>('#nod-state')!
+  nodPitchEl = app.querySelector<HTMLDivElement>('#nod-pitch')!
+  nodCountEl = app.querySelector<HTMLDivElement>('#nod-count')!
+  nodHintEl = app.querySelector<HTMLDivElement>('#nod-hint')!
   injectStyles()
 }
 
@@ -64,6 +116,51 @@ export function setHudCard(type: CardType, text: string) {
   if (!cardEl) return
   cardEl.className = `hud-card hud-${type.toLowerCase()}`
   cardEl.textContent = text || 'No intervention'
+}
+
+export function setSessionDebug(options: {
+  mode: string
+  transcriptTurns: number
+  activeCardType: CardType
+  backgroundStatus: string
+  lastRecap: string
+}) {
+  if (!sessionModeEl) return
+  sessionModeEl.textContent = `Mode: ${options.mode}`
+  sessionTurnsEl.textContent = `Turns: ${options.transcriptTurns}`
+  sessionCardEl.textContent = `Card: ${options.activeCardType}`
+  sessionRestoreEl.textContent = `Restore: ${options.backgroundStatus}`
+  sessionRecapEl.textContent = `Recap: ${options.lastRecap || '--'}`
+}
+
+export function setVadDebug(options: {
+  threshold: number
+  rms: number
+  forwarded: boolean
+  bufferedMs: number
+}) {
+  if (!vadGateEl) return
+  vadGateEl.textContent = `VAD: ${options.forwarded ? 'sent to ASR' : 'dropped as silence'}`
+  vadLevelEl.textContent = `RMS: ${options.rms.toFixed(3)} / ${options.threshold.toFixed(3)}`
+  vadWindowEl.textContent = `Window: ${options.bufferedMs}ms`
+}
+
+export function setNodDebug(options: {
+  enabled: boolean
+  imuActive: boolean
+  pitchDeg: number
+  detectCount: number
+  lastEvent: string
+}) {
+  if (!nodStateEl) return
+  nodStateEl.textContent = options.enabled
+    ? `Nod: on · ${options.imuActive ? 'IMU active' : 'IMU waiting'} · ${options.lastEvent}`
+    : 'Nod: off'
+  nodPitchEl.textContent = `Pitch: ${options.enabled ? `${options.pitchDeg.toFixed(1)}°` : '--'}`
+  nodCountEl.textContent = `Detected: ${options.detectCount}`
+  nodHintEl.innerHTML = options.enabled
+    ? 'Press <code>N</code> to simulate a nod in the simulator or demo.'
+    : 'Add <code>?nod=1</code> to enable. Press <code>N</code> to simulate when enabled.'
 }
 
 export function renderSetupScreen(options: { onSubmit: (value: string) => void | Promise<void> }) {
@@ -162,12 +259,13 @@ function injectStyles() {
     .status-setup { color: var(--warm); border-color: var(--warm); background: rgba(255,211,143,0.09); }
     .grid {
       display: grid;
-      grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.8fr);
+      grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.85fr);
       gap: 20px;
+      align-items: start;
     }
     .panel {
       padding: 20px;
-      min-height: 280px;
+      min-height: 220px;
     }
     .panel-head {
       display: flex;
@@ -189,20 +287,57 @@ function injectStyles() {
       color: #ebf4ef;
       font: 16px/1.55 'IBM Plex Mono', 'SFMono-Regular', monospace;
     }
-    .card-panel { display: flex; flex-direction: column; }
+    .side-stack {
+      display: grid;
+      gap: 20px;
+    }
+    .card-panel {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .signal-grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .signal-line {
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02)),
+        rgba(255, 255, 255, 0.03);
+      font: 600 14px/1.35 'IBM Plex Mono', 'SFMono-Regular', monospace;
+    }
+    .signal-wide {
+      grid-column: 1 / -1;
+    }
+    .nod-hint {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .nod-hint code {
+      font-family: 'IBM Plex Mono', 'SFMono-Regular', monospace;
+      color: var(--warm);
+    }
     .hud-card {
       flex: 1;
       display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
+      align-items: flex-start;
+      justify-content: flex-start;
+      padding: 22px;
       border-radius: 18px;
       border: 1px solid var(--line);
-      font: 700 30px/1.1 'IBM Plex Sans Condensed', 'Avenir Next Condensed', sans-serif;
+      font: 700 24px/1.35 'IBM Plex Sans Condensed', 'Avenir Next Condensed', sans-serif;
       letter-spacing: 0.01em;
-      text-align: center;
-      min-height: 220px;
-      background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.12));
+      text-align: left;
+      white-space: pre-line;
+      min-height: 200px;
+      background:
+        radial-gradient(circle at top right, rgba(157,255,122,0.07), transparent 34%),
+        linear-gradient(180deg, rgba(255,255,255,0.05), rgba(0,0,0,0.14));
     }
     .hud-none { color: #ced5d1; }
     .hud-hint { color: var(--hint); }
@@ -242,6 +377,7 @@ function injectStyles() {
     @media (max-width: 820px) {
       .shell { padding: 18px; }
       .grid { grid-template-columns: 1fr; }
+      .signal-grid { grid-template-columns: 1fr; }
       h1 { font-size: 34px; }
       .setup-form { grid-template-columns: 1fr; }
     }
