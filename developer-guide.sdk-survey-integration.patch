@@ -1,0 +1,190 @@
+diff --git a/developer-guide.md b/developer-guide.md
+--- a/developer-guide.md
++++ b/developer-guide.md
+@@
+-# Even G2 開発者ガイド（2026年6月時点）
++# Even G2 開発者ガイド（2026年7月時点）
+@@
+ ## アーキテクチャ
+@@
+ - アプリロジックはスマホ上のWebViewで動作
+ - グラスはディスプレイ描画とスクロール処理を担当
+ - 標準ブラウザAPI（`fetch`, `Canvas`, `navigator.geolocation`）が使える
++- `album` / `camera` パーミッションはグラスではなくスマホ側のフォトライブラリ / カメラを使う
++
++出典: `research/sdk-survey-2026-07-19.md`
+@@
+ ### マイク
+@@
+ ```typescript
+-// app.json に "g2-microphone" パーミッション必要
+-bridge.audioControl(true);   // 録音開始
++// app.json に "g2-microphone" または "phone-microphone" が必要
++bridge.audioControl(true);   // 録音開始（デフォルトはグラス側）
+ bridge.audioControl(false);  // 録音停止
+ // event.audioEvent.audioPcm → Uint8Array (PCM 16kHz mono 16bit)
++// bridge.audioControl(true, AudioInputSource.Glasses | AudioInputSource.Phone)
+ ```
++
++- `g2-microphone` はグラス内蔵4マイクアレイのマージ済み単一ストリーム
++- `phone-microphone` はスマホ側マイク
++- マイク別分離 / DOA は未公開
++
++出典: `research/sdk-survey-2026-07-19.md`
+@@
+ ### IMUセンサー
+@@
+ ```typescript
+-bridge.imuControl(true, 100);  // 有効化、100ms間隔
++bridge.imuControl(true, ImuReportPace.P100);  // 有効化
+ // sysEvent.imuData { x, y, z }
+ bridge.imuControl(false);
+ // ※実機で動作しない報告あり（SDK版数による）
+ ```
++
++- `ImuReportPace.P100`, `P500`, `P1000` を選べる
++- 軸定義・単位・実サンプリングHzは公式FAQでTBD
++
++出典: `research/sdk-survey-2026-07-19.md`
++
++### 位置情報
++
++```typescript
++bridge.getAppLocation();
++bridge.startAppLocationUpdates();
++```
++
++- ワンショット取得と継続取得の両方に対応
++- 実機では Hub 配布後に動作し、QRサイドロードでは `PERMISSION_DENIED` になる
++
++出典: `research/sdk-survey-2026-07-19.md`
+@@
+ ### ローカルストレージ
+@@
+ ```typescript
+ bridge.getLocalStorage('key');        // string | null
+ bridge.setLocalStorage('key', 'value'); // boolean
++bridge.setBackgroundState('key', 'value');
++bridge.onBackgroundRestore((state) => { ... });
+ ```
++
++- 永続化はSDKの `getLocalStorage` / `setLocalStorage` を優先する
++- Headless WebView がバックグラウンド化で破棄・再生成されるため、ブラウザ標準の `localStorage` だけに依存しない
++- `setBackgroundState` / `onBackgroundRestore` はバックグラウンド復帰専用の状態保存フック
++
++出典: `research/sdk-survey-2026-07-19.md`
+@@
+ ### デバイス情報
+@@
+ ```typescript
+ bridge.getDeviceInfo();   // モデル、シリアル、接続タイプ
+ bridge.getUserInfo();     // UID、名前、国
+@@
+   // バッテリー残量、装着状態、充電状態
+ });
+ ```
++
++- `getDeviceInfo()` はバッテリー、装着、充電、ケース収納状態も返す
++- `onDeviceStatusChanged()` でも同種の状態変化を購読できる
++
++出典: `research/sdk-survey-2026-07-19.md`
++
++### 未対応機能
++
++- 音声出力APIなし（TTS、効果音、Bluetooth音声出力を含む）
++- プッシュ通知なし（プラグインは foreground-only）
++- バイブ / 触覚フィードバックなし
++
++出典: `research/sdk-survey-2026-07-19.md`
+@@
+-利用可能パーミッション: `network`, `g2-microphone`, `phone-microphone`, `album`, `location`, `camera`
++利用可能パーミッションは6種類: `network`, `g2-microphone`, `phone-microphone`, `album`, `location`, `camera`
++
++| パーミッション | 用途 |
++|---|---|
++| `network` | APIサーバーや外部リソースへのアクセス |
++| `g2-microphone` | グラス内蔵マイク入力 |
++| `phone-microphone` | スマホ側マイク入力 |
++| `album` | スマホ側フォトライブラリから画像選択 |
++| `location` | スマホ側位置情報取得 |
++| `camera` | スマホ側カメラで撮影 |
++
++- `album` / `camera` は `bridge.pickImageFromAlbum()` / `captureImageFromCamera()` で base64 画像（`AppImageAsset`）を受け取る用途
++
++出典: `research/sdk-survey-2026-07-19.md`
+@@
+ ## レビュー審査の要件
+@@
+ - ダブルタップで `bridge.shutDownPageContainer(1)` を呼ぶ（終了処理）
+ - 初回起動時はグラス側にセットアップ案内を表示
+ - 設定は `localStorage` で記憶、再プロンプト禁止
+ - APIサーバーのCORS設定が必要（app.jsonのホワイトリストはCORSの代替ではない）
+ - `new Function()` / `eval()` 禁止（依存ライブラリ含む）
++- アプリ名に `Even` を含めない
++- アイコンはモノクロのみ
++- プライバシーポリシーは要求する全パーミッションをカバーする
++- ロック画面で2分生存することを確認する
++- 言語別リリースノートが必須（対応言語: `en`, `de`, `fr`, `es`, `it`, `zh`, `ja`, `ko`）
++
++- 審査フローは Draft → Test → Submitted → Released の fix-forward
++- Released 後は編集・ロールバック不可
+ 
+ 検証: `grep -c "new Function" dist/*.js` が0であること
++
++出典: `research/sdk-survey-2026-07-19.md`
+@@
+ ### シミュレータ
+@@
+ ```bash
+ npx evenhub-simulator http://localhost:5173
+ 
+ # 自動化ポート付き
+ npx evenhub-simulator http://localhost:5173 --automation-port 9222
+ ```
++
++#### simulator automation HTTP API
++
++| エンドポイント | 用途 |
++|---|---|
++| `/api/ping` | 死活確認 |
++| `/api/screenshot/glasses` | グラス表示のスクリーンショット取得 |
++| `/api/screenshot/webview` | WebViewのスクリーンショット取得 |
++| `/api/console` | コンソールログ取得 |
++| `/api/input` | 入力イベント注入 |
++
++出典: `research/sdk-survey-2026-07-19.md`
+@@
+ ### ハードウェア制約
+ - スピーカーなし → 音声フィードバック不可
+ - カメラなし → 撮影不可
+ - 緑モノクロのみ（16階調）
+ - 576x288は非常に狭い → 2秒で読める情報量で設計する
+ - BLE帯域 → 画像転送は遅く、同時送信不可
+ - 画像は1ページ最大4枚（各200x100px以下）
++- バイブ / 触覚フィードバックなし
++
++出典: `research/sdk-survey-2026-07-19.md`
+@@
+ ### SDK ハマりポイント
+ - **フォントサイズ変更不可** → OffscreenCanvas + fillText() で画像化して回避
+ - **イベント正規化必須** → シミュレータと実機でイベント形式が違う
+ - **`createStartUpPageContainer` は1回だけ** → 2回目以降は `rebuildPageContainer`
+ - **ページ作成時に画像データ送信不可** → 先にコンテナ作成、後から `updateImageRawData`
+ - **IMU が動かない可能性** → SDK版数を確認
++- **IMUの軸定義・単位は未確定** → ジェスチャー推定や姿勢制御は実測前提で組む
+ - **GPSはHub配布ビルドでのみ動作** → QRサイドロードでは `PERMISSION_DENIED`
++- **foreground-only** → 通知起点やバックグラウンド常駐前提の設計は不可
+ - **長押し・横スワイプなし** → タップ、ダブルタップ、上下スクロールのみ
+ - **絵文字は表示されない可能性** → 基本Unicodeシンボルのみ
++
++出典: `research/sdk-survey-2026-07-19.md`
+@@
+ ### BLE帯域設計 Tips
++
++- 公式の目安は約10〜30KB/s
++- 実測例では 30x30px GIF で約9.3fps
++- アニメーションは面積とフレームレートの交換になるため、小さく単純な領域に限定する
++
++出典: `research/sdk-survey-2026-07-19.md`
+ 
+ **重要な訂正（2026-07-14、旧記載「width × height ÷ 2 バイト」を差し替え）**: 画像コンテナはPNGとして転送されるが、実測したところ8-bit RGBA（color type 6, truecolor+alpha）でエンコードされており、「width × height ÷ 2 バイト」という4bit量子化前提のペイロード計算式は誤りだった。ハードウェア側ディスプレイが緑モノクロ4bit（16階調）でしか表現できないのは事実だが、それは**グラス側の表示能力の話であり、BLE経由で転送されるPNGデータ自体が4bit量子化されているわけではない**。以下は`apps/iss-tracker-hud`の各画像コンテナを`@napi-rs/canvas`で描画再現し、実ファイルサイズを実測した値（PNG圧縮後のバイト数のため、上記の単純な width×height 系の概算式では出せない）:

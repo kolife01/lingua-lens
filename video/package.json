@@ -1,0 +1,24 @@
+{
+  "name": "lingua-lens-video",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "preview": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts LinguaLensDraft out/draft-v0.mp4"
+  },
+  "description": "Remotion draft video for LinguaLens",
+  "dependencies": {
+    "@remotion/media": "^4.0.493",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "remotion": "^4.0.493"
+  },
+  "devDependencies": {
+    "@remotion/cli": "^4.0.493",
+    "@types/node": "^26.1.1",
+    "typescript": "^5.7.3"
+  }
+}
