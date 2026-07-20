@@ -2,15 +2,24 @@
 
 LinguaLens is a real-time English conversation coach for Even G2 that shows short, glanceable hints on the glasses HUD without pulling the learner out of the conversation.
 
-![LinguaLens HUD screenshot placeholder](docs/images/hud-screenshot-placeholder.png)
+![HINT card: three complete phrases with Japanese glosses on the G2 HUD](docs/images/hud-hint-3choices.png)
 
-_Place the latest HUD screenshot in `docs/images/`._
+_You stalled. Three phrases you can say right now, each with a gloss in your language. Pick one and keep talking._
+
+| WORD | RECAP |
+| --- | --- |
+| ![WORD card](docs/images/hud-word.png) | ![RECAP card](docs/images/hud-recap.png) |
+| A hard word from the other side, in plain English. | After a pause, the phrase you couldn't say — back again next session. |
+
+_All screenshots are real output from the official Even Hub simulator (576×288, green monochrome)._
 
 ## What It Is
 
 LinguaLens listens to a live conversation, transcribes it, decides whether a coaching intervention is actually needed, and only then shows a short card on the Even G2 HUD.
 
 Telemetry logs stay on the device by default and are only sent anywhere if the user explicitly sets a log endpoint.
+
+API keys are never bundled; users enter them at runtime and they are stored on-device.
 
 ## The Problem
 
