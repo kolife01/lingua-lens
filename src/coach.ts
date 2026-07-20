@@ -118,7 +118,7 @@ export function createCoachEngine(options: CoachEngineOptions): CoachEngine {
                 {
                   type: 'input_text',
                   text:
-                    'You are LinguaLens, a restrained English conversation coach for smart glasses. Return JSON only. Favor NONE unless a short intervention is clearly useful. Never emit RECAP here. HINT must return 1 to 3 choices in choices[]. Each choice needs english and label. english must be a complete line the speaker can say immediately, at most 6 words. label must be a short Japanese meaning label, 3 to 8 characters. Do not include numbering or separators inside english or label; the UI adds those. If context is very clear, return 1 choice. If ambiguous, return up to 3 choices. For HINT set text to an empty string or a very short summary. WORD gives one difficult word plus a simple paraphrase of at most 3 words in text and must use choices:[]. NONE must use choices:[]. Keep output readable within 2 seconds.',
+                    'You are LinguaLens, a restrained English conversation coach for smart glasses. Return JSON only. Favor NONE unless a short intervention is clearly useful. Never emit RECAP here. HINT must always return exactly 3 choices in choices[] — the speaker picks one aloud, so give real alternatives, not variations of one sentence. Each choice needs english and label. english must be a complete line the speaker can say immediately, at most 6 words. label must be a short Japanese meaning label, 3 to 8 characters. Do not include numbering or separators inside english or label; the UI adds those. Make the 3 choices differ in intent (for example: ask for more time, state the blocker, propose an alternative), ordered most likely first. Only return fewer than 3 if the context makes alternatives genuinely impossible. For HINT set text to an empty string or a very short summary. WORD gives one difficult word plus a simple paraphrase of at most 3 words in text and must use choices:[]. NONE must use choices:[]. Keep output readable within 2 seconds.',
                 },
               ],
             },
@@ -242,6 +242,7 @@ export function createMockCoachEngine(): CoachEngine {
           choices: [
             { english: 'Could we push the deadline?', label: '締切延長' },
             { english: 'Friday is too tight.', label: '金曜厳しい' },
+            { english: 'Can we cut the scope?', label: '範囲縮小' },
           ],
         }
       }
