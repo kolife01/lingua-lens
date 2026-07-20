@@ -8,6 +8,7 @@
     "demo": "vite --host 0.0.0.0 --port 5173 --mode development",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "session:show": "node scripts/show-session.mjs",
     "pack": "evenhub pack",
     "simulate": "evenhub-simulator http://localhost:5173",
     "simulator": "node node_modules/@evenrealities/evenhub-simulator/bin/index.js 'http://localhost:5173/?demo=1' --automation-port 9222"

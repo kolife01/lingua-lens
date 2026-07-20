@@ -34,7 +34,7 @@ export interface CoachEngine {
 
 export interface CoachEngineOptions {
   apiKey: string
-  onUsage?: (report: ResponseUsageReport) => void | Promise<void>
+  onUsage?: (report: ResponseUsageReport & { kind: 'decision' | 'recap' }) => void | Promise<void>
 }
 
 const COACH_SCHEMA = {
@@ -153,6 +153,7 @@ export function createCoachEngine(options: CoachEngineOptions): CoachEngine {
 
       const payload = await readResponsePayload(response)
       await onUsage?.({
+        kind: 'decision',
         model: INTERVENTION_MODEL,
         inputTokens: payload.usage?.input_tokens ?? 0,
         outputTokens: payload.usage?.output_tokens ?? 0,
@@ -212,6 +213,7 @@ export function createCoachEngine(options: CoachEngineOptions): CoachEngine {
 
       const payload = await readResponsePayload(response)
       await onUsage?.({
+        kind: 'recap',
         model: RECAP_MODEL,
         inputTokens: payload.usage?.input_tokens ?? 0,
         outputTokens: payload.usage?.output_tokens ?? 0,

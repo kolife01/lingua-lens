@@ -3,7 +3,14 @@ import type { TranscriptionUsageReport } from '../budget'
 
 export interface BatchTranscriberOptions {
   apiKey: string
-  onTranscript: (text: string) => void | Promise<void>
+  onTranscript: (result: {
+    text: string
+    model: string
+    audioSeconds: number
+    rms: number
+    bufferedMs: number
+    latencyMs: number
+  }) => void | Promise<void>
   onUsage?: (report: TranscriptionUsageReport) => void | Promise<void>
   isRequestAllowed?: () => boolean | Promise<boolean>
   onRequestBlocked?: () => void | Promise<void>
@@ -76,7 +83,9 @@ export function createBatchTranscriber(options: BatchTranscriberOptions): BatchT
           return
         }
         const audioSeconds = pcm.byteLength / (CHANNEL_COUNT * (BITS_PER_SAMPLE / 8) * SAMPLE_RATE)
+        const startedAt = performance.now()
         const text = await transcribeWav(options.apiKey, wav)
+        const latencyMs = Math.round(performance.now() - startedAt)
         await options.onUsage?.({
           model: ASR_MODEL,
           audioSeconds,
@@ -84,7 +93,14 @@ export function createBatchTranscriber(options: BatchTranscriberOptions): BatchT
         const normalized = text.replace(/\s+/g, ' ').trim()
         if (!normalized || normalized === lastText) return
         lastText = normalized
-        await options.onTranscript(normalized)
+        await options.onTranscript({
+          text: normalized,
+          model: ASR_MODEL,
+          audioSeconds,
+          rms,
+          bufferedMs,
+          latencyMs,
+        })
       } catch (err) {
         options.onError?.(err)
       }

@@ -18,6 +18,8 @@ npm run dev
 npx evenhub-simulator http://localhost:5173
 ```
 
+Dev telemetry logs are written only while the Vite dev server is running. Each server boot creates `logs/session-<timestamp>.jsonl`.
+
 Live mode with nod gesture debug:
 
 ```bash
@@ -61,6 +63,14 @@ The demo script bypasses ASR and injects transcript turns on a timeline so HINT,
 
 ## Notes
 
+- The dev server exposes `POST /__log` only in development. The client logger is also dev-only, so production builds do not emit or include telemetry code paths.
+- To inspect the latest captured session timeline, run:
+
+```bash
+npm run session:show
+```
+
+- The session viewer prints a readable timeline for `ASR -> coach decision -> HUD render/quiet`, plus recap-flow and nod events, then ends with latency and estimated-cost summaries.
 - HUD layout is fixed to `TextContainer x3 + ImageContainer x1`.
 - Text writes are throttled to `>=200ms`; hero image writes are throttled to `>=1000ms`.
 - When a card TTL expires, the HUD returns to a quiet state with only the status line visible.

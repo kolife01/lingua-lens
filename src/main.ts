@@ -48,9 +48,12 @@ import {
   getDemoItemsDueSince,
 } from './demo'
 import { createNodDetector, type ImuSample } from './nod'
+import { INTERVENTION_MODEL, PRICING, RECAP_MODEL } from './models'
+import type { TelemetryLogger } from './telemetry'
 
 const bridge = await waitForEvenAppBridge()
 const budgetTracker = createDailyBudgetTracker(bridge)
+const telemetry = await loadTelemetryLogger()
 
 const PAGE_ID = 1
 const STATUS_ID = 1
@@ -78,6 +81,17 @@ const BACKGROUND_SYNC_DELAY_MS = 120
 
 type EngineMode = 'setup' | 'live' | 'demo'
 type TranscriptRole = 'speaker' | 'partner'
+
+interface RoleKeywordMatch {
+  keyword: string
+  matchedText: string
+}
+
+interface RoleInferenceResult {
+  role: TranscriptRole
+  rule: string
+  matches: RoleKeywordMatch[]
+}
 
 interface TranscriptEntry extends TranscriptTurn {
   id: string
@@ -113,6 +127,8 @@ let activePcmHandler: ((pcm: Uint8Array) => void) | null = null
 let activeShutdownHandler: (() => Promise<void>) | null = null
 let recapInFlight = false
 let activeCardShownAt = 0
+let activeCardShownWallClock = 0
+let activeCardAuxText = ''
 let lastSpeechAt = 0
 let recapCycleToken = 0
 let recapTriggeredToken = -1
@@ -126,6 +142,8 @@ let backgroundSyncTimer: number | null = null
 let backgroundStatus = 'idle'
 let latestRestoredAt = 0
 let budgetSnapshot: BudgetSnapshot | null = null
+const decisionUsageQueue: Array<{ model: string; inputTokens: number; outputTokens: number }> = []
+const recapUsageQueue: Array<{ model: string; inputTokens: number; outputTokens: number }> = []
 
 const backgroundBridge = createBackgroundSessionBridge(bridge)
 const unsubscribeBackgroundRestore = backgroundBridge.onRestore(state => {
@@ -141,6 +159,15 @@ const nodDetector = createNodDetector({
     if (now - nodDebugLastRenderedAt < 100 && state.lastEvent !== 'detected' && state.lastEvent !== 'simulated') return
     nodDebugLastRenderedAt = now
     setNodDebug(state)
+    if (state.lastEvent === 'detected' || state.lastEvent === 'simulated') {
+      telemetry.log('nod', {
+        event: state.lastEvent,
+        activeCardType: activeCard.type,
+        ttl_ms: activeCard.ttl_ms || undefined,
+        detectCount: state.detectCount,
+        source: toSessionSource(mode),
+      })
+    }
   },
   onNod: () => {
     void handleNodGesture()
@@ -285,6 +312,12 @@ async function startLive(restored?: BackgroundSessionState): Promise<void> {
     : createCoachEngine({
         apiKey,
         onUsage: async report => {
+          const queue = report.kind === 'decision' ? decisionUsageQueue : recapUsageQueue
+          queue.push({
+            model: report.model,
+            inputTokens: report.inputTokens,
+            outputTokens: report.outputTokens,
+          })
           const nextSnapshot = await budgetTracker.recordResponseUsage(report)
           await syncBudgetSnapshot(nextSnapshot)
         },
@@ -293,6 +326,8 @@ async function startLive(restored?: BackgroundSessionState): Promise<void> {
   activeCard = restored ? restoreCoachCard(restored.activeCard) : { type: 'NONE', text: '', ttl_ms: 0, choices: [] }
   activeCardDisplayText = ''
   activeCardShownAt = 0
+  activeCardShownWallClock = 0
+  activeCardAuxText = ''
   lastSpeechAt = 0
   recapCycleToken = 0
   recapTriggeredToken = -1
@@ -332,10 +367,25 @@ async function startLive(restored?: BackgroundSessionState): Promise<void> {
 
   const transcriber = createBatchTranscriber({
     apiKey,
-    onTranscript: async text => {
-      const normalized = normalizeTranscriptText(text)
+    onTranscript: async result => {
+      const normalized = normalizeTranscriptText(result.text)
       if (!normalized) return
-      await registerTranscript(inferLiveRole(normalized), normalized, false)
+      const roleInference = inferLiveRole(normalized)
+      telemetry.log('asr', {
+        transcript: normalized,
+        role: roleInference.role,
+        roleInference: {
+          rule: roleInference.rule,
+          matches: roleInference.matches,
+        },
+        rms: roundNumber(result.rms, 4),
+        asrLatencyMs: result.latencyMs,
+        audioSeconds: roundNumber(result.audioSeconds, 3),
+        bufferedMs: result.bufferedMs,
+        model: result.model,
+        source: 'live',
+      })
+      await registerTranscript(roleInference.role, normalized, false)
     },
     onVadDebug: info => {
       setVadDebug(info)
@@ -377,11 +427,25 @@ async function startDemo(restored?: BackgroundSessionState): Promise<void> {
   shutdownStarted = false
   budgetSnapshot = await budgetTracker.getSnapshot()
   renderBudgetPanel()
-  coach = apiKey && !FORCE_MOCK ? createCoachEngine({ apiKey }) : createMockCoachEngine()
+  coach = apiKey && !FORCE_MOCK
+    ? createCoachEngine({
+        apiKey,
+        onUsage: async report => {
+          const queue = report.kind === 'decision' ? decisionUsageQueue : recapUsageQueue
+          queue.push({
+            model: report.model,
+            inputTokens: report.inputTokens,
+            outputTokens: report.outputTokens,
+          })
+        },
+      })
+    : createMockCoachEngine()
   transcriptLog = restored ? restoreTranscriptEntries(restored.transcriptLog) : []
   activeCard = restored ? restoreCoachCard(restored.activeCard) : { type: 'NONE', text: '', ttl_ms: 0, choices: [] }
   activeCardDisplayText = ''
   activeCardShownAt = 0
+  activeCardShownWallClock = 0
+  activeCardAuxText = ''
   const engineLabel = apiKey && !FORCE_MOCK ? 'Demo script · GPT coach' : 'Demo script · mock coach'
   setEngineState('connecting', engineLabel)
   if (restored) {
@@ -427,6 +491,8 @@ async function endSession(): Promise<void> {
   activeShutdownHandler = null
   activeCardDisplayText = ''
   activeCardShownAt = 0
+  activeCardShownWallClock = 0
+  activeCardAuxText = ''
   lastSpeechAt = 0
   backgroundStatus = 'cleared'
   refreshSessionDebug()
@@ -509,10 +575,31 @@ async function registerTranscript(role: TranscriptRole, text: string, fromDemo: 
   if (!fromDemo && !FORCE_MOCK && !(await canStartLiveApiCall())) return
 
   try {
+    const startedAt = performance.now()
     const decision = await currentCoach.decide({
       mode,
       transcriptWindow: transcriptLog,
       previousCard: activeCard,
+    })
+    const latencyMs = Math.round(performance.now() - startedAt)
+    const usage = takeUsageReport(decisionUsageQueue)
+    telemetry.log('decision', {
+      trigger: 'transcript',
+      transcriptWindow: transcriptLog.map(item => ({ role: item.role, text: item.text, timestamp: item.timestamp })),
+      model: usage?.model ?? (fromDemo ? (apiKey && !FORCE_MOCK ? INTERVENTION_MODEL : 'mock-coach') : FORCE_MOCK ? 'mock-coach' : INTERVENTION_MODEL),
+      decision: {
+        type: decision.type,
+        text: decision.text,
+        choices: decision.choices.map(choice => ({ ...choice })),
+        ttl_ms: decision.ttl_ms,
+      },
+      latencyMs,
+      estimatedCostUsd: usage ? estimateResponseCostUsd(usage.model, usage.inputTokens, usage.outputTokens) : 0,
+      usage: {
+        inputTokens: usage?.inputTokens ?? 0,
+        outputTokens: usage?.outputTokens ?? 0,
+      },
+      source: toSessionSource(mode),
     })
     await renderDecision(speakerLabel, decision)
   } catch (err) {
@@ -527,7 +614,7 @@ async function renderDecision(sourceLabel: string, decision: CoachDecision): Pro
       const now = performance.now()
       if (now - activeCardShownAt < activeCard.ttl_ms) return
     }
-    await renderQuiet(`${mode === 'demo' ? 'DEMO' : 'LIVE'} · ${sourceLabel}`)
+    await renderQuiet(`${mode === 'demo' ? 'DEMO' : 'LIVE'} · ${sourceLabel}`, 'decision_none')
     return
   }
 
@@ -538,23 +625,52 @@ async function presentDecision(sourceLabel: string, decision: CoachDecision): Pr
   activeCard = decision
   activeCardDisplayText = buildCardBody(decision)
   activeCardShownAt = performance.now()
+  activeCardShownWallClock = Date.now()
   const body = activeCardDisplayText
   const aux = `${sourceLabel} · ${decision.ttl_ms}ms`
+  activeCardAuxText = aux
   await hud.renderCard(decision.type, body, aux)
   setHudCard(decision.type, body)
+  telemetry.log('hud', {
+    phase: 'render',
+    type: decision.type,
+    body,
+    aux,
+    displayedAt: new Date(activeCardShownWallClock).toISOString(),
+    source: sourceLabel,
+    ttl_ms: decision.ttl_ms,
+  })
   refreshSessionDebug()
   scheduleBackgroundSync()
 }
 
-async function renderQuiet(status: string): Promise<void> {
+async function renderQuiet(status: string, reason: string = 'quiet'): Promise<void> {
+  const previousCard = activeCard
+  const previousBody = activeCardDisplayText
+  const previousAux = activeCardAuxText
+  const displayedAt = activeCardShownWallClock ? new Date(activeCardShownWallClock).toISOString() : new Date().toISOString()
+  const quietAt = new Date().toISOString()
   activeCard = { type: 'NONE', text: '', ttl_ms: 0, choices: [] }
   activeCardDisplayText = ''
   activeCardShownAt = 0
+  activeCardShownWallClock = 0
+  activeCardAuxText = ''
   await hud.renderQuiet(getHudStatusLabel(status))
   if (mode === 'live' && budgetSnapshot?.reached) {
     await hud.renderStatus('Daily budget reached', `Remaining ${formatUsd(budgetSnapshot.remainingUsd)}`)
   }
   setHudCard('NONE', 'No intervention')
+  telemetry.log('hud', {
+    phase: 'quiet',
+    type: previousCard.type,
+    body: previousBody,
+    aux: previousAux,
+    displayedAt,
+    quietAt,
+    source: status,
+    ttl_ms: previousCard.ttl_ms || undefined,
+    reason,
+  })
   refreshSessionDebug()
   scheduleBackgroundSync()
 }
@@ -569,12 +685,25 @@ async function handleNodGesture(): Promise<void> {
     }
     await hud.renderCard(activeCard.type, activeCardDisplayText || activeCard.text, `NOD · ${activeCard.ttl_ms}ms`)
     setHudCard(activeCard.type, activeCardDisplayText || activeCard.text)
+    activeCardAuxText = `NOD · ${activeCard.ttl_ms}ms`
+    telemetry.log('nod', {
+      event: 'extend_active_card',
+      activeCardType: activeCard.type,
+      ttl_ms: activeCard.ttl_ms,
+      source: toSessionSource(mode),
+    })
     scheduleBackgroundSync()
     return
   }
 
   const recapText = findLatestRecapText()
   if (!recapText) return
+  telemetry.log('nod', {
+    event: 'restore_recap',
+    activeCardType: 'RECAP',
+    ttl_ms: 5000,
+    source: toSessionSource(mode),
+  })
   await presentDecision('RECAP nod', {
     type: 'RECAP',
     text: recapText,
@@ -590,8 +719,36 @@ async function triggerRecap(fromDemo: boolean): Promise<void> {
   if (!fromDemo && !FORCE_MOCK && !(await canStartLiveApiCall())) return
 
   recapInFlight = true
+  const startedAt = performance.now()
+  telemetry.log('recap_flow', {
+    stage: 'request_started',
+    silenceMs: RECAP_SILENCE_MS,
+    lastTranscriptAt: lastEntry.timestamp,
+    triggerToken: recapCycleToken,
+    source: fromDemo ? 'demo' : 'live',
+  })
   try {
     const decision = await coach.createRecap(transcriptLog)
+    const latencyMs = Math.round(performance.now() - startedAt)
+    const usage = takeUsageReport(recapUsageQueue)
+    telemetry.log('decision', {
+      trigger: 'recap',
+      transcriptWindow: transcriptLog.map(item => ({ role: item.role, text: item.text, timestamp: item.timestamp })),
+      model: usage?.model ?? (apiKey && !FORCE_MOCK ? RECAP_MODEL : 'mock-coach'),
+      decision: {
+        type: decision.type,
+        text: decision.text,
+        choices: [],
+        ttl_ms: decision.ttl_ms,
+      },
+      latencyMs,
+      estimatedCostUsd: usage ? estimateResponseCostUsd(usage.model, usage.inputTokens, usage.outputTokens) : 0,
+      usage: {
+        inputTokens: usage?.inputTokens ?? 0,
+        outputTokens: usage?.outputTokens ?? 0,
+      },
+      source: fromDemo ? 'demo' : 'live',
+    })
     if (decision.type === 'NONE') return
     transcriptLog = [
       ...transcriptLog,
@@ -606,9 +763,27 @@ async function triggerRecap(fromDemo: boolean): Promise<void> {
     setTranscriptMeta(fromDemo ? 'Demo timeline active · recap pause' : 'Silence recap generated')
     renderTranscriptPanel(fromDemo ? 'Demo timeline active · recap pause' : 'Silence recap generated')
     lastSavedLog = [{ type: 'RECAP', text: decision.text, createdAt: Date.now() }]
+    telemetry.log('recap_flow', {
+      stage: 'request_completed',
+      silenceMs: RECAP_SILENCE_MS,
+      lastTranscriptAt: lastEntry.timestamp,
+      triggerToken: recapCycleToken,
+      source: fromDemo ? 'demo' : 'live',
+      latencyMs,
+      decisionText: decision.text,
+    })
     await presentDecision('RECAP pause', decision)
     scheduleBackgroundSync()
   } catch (err) {
+    telemetry.log('recap_flow', {
+      stage: 'request_failed',
+      silenceMs: RECAP_SILENCE_MS,
+      lastTranscriptAt: lastEntry.timestamp,
+      triggerToken: recapCycleToken,
+      source: fromDemo ? 'demo' : 'live',
+      latencyMs: Math.round(performance.now() - startedAt),
+      error: getErrorMessage(err),
+    })
     console.error('Recap error:', err)
     setEngineState('error', `Recap: ${getErrorMessage(err)}`)
   } finally {
@@ -631,7 +806,7 @@ function runHeartbeat(): void {
   }
 
   if (activeCard.type !== 'NONE' && activeCardShownAt > 0 && now - activeCardShownAt >= activeCard.ttl_ms) {
-    void renderQuiet(mode === 'demo' ? 'DEMO quiet' : 'LIVE quiet')
+    void renderQuiet(mode === 'demo' ? 'DEMO quiet' : 'LIVE quiet', 'ttl_expired')
   }
 
   if (
@@ -641,6 +816,13 @@ function runHeartbeat(): void {
     !recapInFlight
   ) {
     recapTriggeredToken = recapCycleToken
+    telemetry.log('recap_flow', {
+      stage: 'silence_detected',
+      silenceMs: RECAP_SILENCE_MS,
+      lastTranscriptAt: transcriptLog[transcriptLog.length - 1]?.timestamp,
+      triggerToken: recapCycleToken,
+      source: recapTriggerSourceIsDemo ? 'demo' : 'live',
+    })
     void triggerRecap(recapTriggerSourceIsDemo)
   }
 }
@@ -662,16 +844,30 @@ function normalizeTranscriptText(text: string): string {
   return text.replace(/\s+/g, ' ').trim()
 }
 
-function inferLiveRole(text: string): TranscriptRole {
+function inferLiveRole(text: string): RoleInferenceResult {
   const lower = text.toLowerCase()
   const previousRole = transcriptLog[transcriptLog.length - 1]?.role
-  if (/(could you|can you|do you|is it|are you|what|why|when|deadline|stakeholder)/.test(lower)) {
-    return 'partner'
+  const partnerMatches = findKeywordMatches(lower, ['could you', 'can you', 'do you', 'is it', 'are you', 'what', 'why', 'when', 'deadline', 'stakeholder'])
+  if (partnerMatches.length > 0) {
+    return {
+      role: 'partner',
+      rule: 'partner_keywords',
+      matches: partnerMatches,
+    }
   }
-  if (/(i |we |my |our |let me|i'm|i am|uh|um)/.test(lower)) {
-    return 'speaker'
+  const speakerMatches = findKeywordMatches(lower, ['i ', 'we ', 'my ', 'our ', 'let me', "i'm", 'i am', 'uh', 'um'])
+  if (speakerMatches.length > 0) {
+    return {
+      role: 'speaker',
+      rule: 'speaker_keywords',
+      matches: speakerMatches,
+    }
   }
-  return previousRole === 'speaker' ? 'partner' : 'speaker'
+  return {
+    role: previousRole === 'speaker' ? 'partner' : 'speaker',
+    rule: previousRole === 'speaker' ? 'alternating_after_speaker' : 'alternating_default_speaker',
+    matches: [],
+  }
 }
 
 function getErrorMessage(err: unknown): string {
@@ -921,6 +1117,45 @@ function parseBackgroundPayload(raw: string | undefined): BackgroundSessionState
   } catch {
     return null
   }
+}
+
+async function loadTelemetryLogger(): Promise<TelemetryLogger> {
+  if (!import.meta.env.DEV) {
+    return {
+      log: () => {},
+    }
+  }
+  const module = await import('./telemetry')
+  return module.createTelemetryLogger()
+}
+
+function takeUsageReport(queue: Array<{ model: string; inputTokens: number; outputTokens: number }>) {
+  return queue.shift() ?? null
+}
+
+function estimateResponseCostUsd(model: string, inputTokens: number, outputTokens: number): number {
+  const pricing = PRICING[model]
+  if (!pricing) return 0
+  const inputCost = ((pricing.inputUsdPerMillionTokens ?? 0) * Math.max(0, inputTokens)) / 1_000_000
+  const outputCost = ((pricing.outputUsdPerMillionTokens ?? 0) * Math.max(0, outputTokens)) / 1_000_000
+  return roundNumber(inputCost + outputCost, 6)
+}
+
+function findKeywordMatches(text: string, keywords: string[]): RoleKeywordMatch[] {
+  return keywords.flatMap(keyword => {
+    const index = text.indexOf(keyword)
+    if (index === -1) return []
+    return [{ keyword, matchedText: text.slice(index, index + keyword.length) }]
+  })
+}
+
+function roundNumber(value: number, digits: number): number {
+  const scale = 10 ** digits
+  return Math.round(value * scale) / scale
+}
+
+function toSessionSource(currentMode: EngineMode): 'live' | 'demo' {
+  return currentMode === 'demo' ? 'demo' : 'live'
 }
 
 function formatUsd(value: number): string {
