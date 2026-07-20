@@ -2,6 +2,7 @@ import { INTERVENTION_MODEL, RECAP_MODEL } from './models'
 import type { ResponseUsageReport } from './budget'
 
 export type CoachType = 'HINT' | 'WORD' | 'RECAP' | 'NONE'
+export type AttributedRole = 'learner' | 'partner'
 
 export interface HintChoice {
   english: string
@@ -13,23 +14,28 @@ export interface CoachDecision {
   text: string
   ttl_ms: number
   choices: HintChoice[]
+  continuation: boolean
+  attributed_roles: AttributedRole[]
 }
 
-export interface TranscriptTurn {
-  role: 'speaker' | 'partner'
+export interface TranscriptUtterance {
   text: string
-  timestamp: string
+  startedAt: string
+  endedAt: string
+  gapBeforeMs: number
 }
 
 export interface CoachContext {
   mode: 'setup' | 'live' | 'demo'
-  transcriptWindow: TranscriptTurn[]
+  transcriptWindow: TranscriptUtterance[]
   previousCard: CoachDecision
+  trigger: 'stall' | 'explicit_tap'
+  triggerReason: string
 }
 
 export interface CoachEngine {
   decide(context: CoachContext): Promise<CoachDecision>
-  createRecap(transcriptWindow: TranscriptTurn[]): Promise<CoachDecision>
+  createRecap(transcriptWindow: TranscriptUtterance[]): Promise<CoachDecision>
 }
 
 export interface CoachEngineOptions {
@@ -43,7 +49,7 @@ const COACH_SCHEMA = {
   schema: {
     type: 'object',
     additionalProperties: false,
-    required: ['type', 'text', 'ttl_ms', 'choices'],
+    required: ['type', 'text', 'ttl_ms', 'choices', 'continuation', 'attributed_roles'],
     properties: {
       type: {
         type: 'string',
@@ -56,6 +62,16 @@ const COACH_SCHEMA = {
         type: 'integer',
         minimum: 3500,
         maximum: 6000,
+      },
+      continuation: {
+        type: 'boolean',
+      },
+      attributed_roles: {
+        type: 'array',
+        items: {
+          type: 'string',
+          enum: ['learner', 'partner'],
+        },
       },
       choices: {
         type: 'array',
@@ -118,7 +134,7 @@ export function createCoachEngine(options: CoachEngineOptions): CoachEngine {
                 {
                   type: 'input_text',
                   text:
-                    'You are LinguaLens, a restrained English conversation coach for smart glasses. Return JSON only. Favor NONE unless a short intervention is clearly useful. Never emit RECAP here. HINT must always return exactly 3 choices in choices[] — the speaker picks one aloud, so give real alternatives, not variations of one sentence. Each choice needs english and label. english must be a complete line the speaker can say immediately, at most 6 words. label must be a short Japanese meaning label, 3 to 8 characters. Do not include numbering or separators inside english or label; the UI adds those. Make the 3 choices differ in intent (for example: ask for more time, state the blocker, propose an alternative), ordered most likely first. Only return fewer than 3 if the context makes alternatives genuinely impossible. For HINT set text to an empty string or a very short summary. WORD gives one difficult word plus a simple paraphrase of at most 3 words in text and must use choices:[]. NONE must use choices:[]. Keep output readable within 2 seconds.',
+                    'You are LinguaLens, a restrained English conversation coach for smart glasses. Return JSON only. Favor NONE unless a short intervention is clearly useful. Never emit RECAP here. First attribute each utterance in transcriptWindow to learner or partner and return that full alignment in attributed_roles with exactly one role per utterance in order. Do not assume the app knows the speaker. Infer from the dialogue. If the conversation partner is an AI like GPT-Live or a fluent speaker, their turns tend to be longer and more fluent; learner turns are more likely to contain hesitation, Japanese fragments, shorter broken phrases, or self-repair. If the learner says any Japanese, that is the strongest clue to intent and must override looser contextual guessing: convert that Japanese intent directly into sayable English. If the learner is already mid-sentence, set continuation=true and make all 3 choices continue naturally from what the learner just said, because the learner will speak them immediately after the existing fragment. Only when the learner is not mid-sentence may you produce standalone sentences. HINT must always return exactly 3 choices in choices[]. Each choice needs english and label. english must be short spoken English the learner can say immediately, at most 10 words, with no verbose prefacing. label must be a short Japanese meaning label, 3 to 8 characters. The 3 choices must differ in intent, not just wording, and should be ordered most likely first. WORD should prefer a short example sentence over a paraphrase when that is more useful. WORD and NONE must use choices:[]. Keep output readable within 2 seconds.',
                 },
               ],
             },
@@ -129,6 +145,8 @@ export function createCoachEngine(options: CoachEngineOptions): CoachEngine {
                   type: 'input_text',
                   text: JSON.stringify({
                     mode: context.mode,
+                    trigger: context.trigger,
+                    triggerReason: context.triggerReason,
                     previousCard: context.previousCard,
                     transcriptWindow: context.transcriptWindow,
                   }),
@@ -159,11 +177,11 @@ export function createCoachEngine(options: CoachEngineOptions): CoachEngine {
         outputTokens: payload.usage?.output_tokens ?? 0,
       })
       const parsed = JSON.parse(readOutputText(payload)) as CoachDecision
-      const decision = sanitizeDecision(parsed)
+      const decision = sanitizeDecision(parsed, context.transcriptWindow.length)
       return decision.type === 'RECAP' ? NONE : decision
     },
 
-    async createRecap(transcriptWindow: TranscriptTurn[]): Promise<CoachDecision> {
+    async createRecap(transcriptWindow: TranscriptUtterance[]): Promise<CoachDecision> {
       const response = await fetch('https://api.openai.com/v1/responses', {
         method: 'POST',
         headers: {
@@ -224,6 +242,8 @@ export function createCoachEngine(options: CoachEngineOptions): CoachEngine {
         text: parsed.text,
         ttl_ms: parsed.ttl_ms,
         choices: [],
+        continuation: false,
+        attributed_roles: [],
       })
     },
   }
@@ -236,38 +256,48 @@ export function createMockCoachEngine(): CoachEngine {
       if (!last) return NONE
 
       const text = last.text.toLowerCase()
-      if (last.role === 'speaker' && /(eto|ano|uh|um|なんだっけ|わたしは|i want say)/.test(text)) {
+      const attributed_roles = inferMockRoles(context.transcriptWindow)
+      if (/(eto|ano|uh|um|えっと|あの|なんだっけ|how do you say|what's the word)/i.test(text)) {
         return {
           type: 'HINT',
           text: '',
-          ttl_ms: 5500,
+          ttl_ms: 6000,
+          continuation: /how to|want to|because|the login flow|i am not sure/i.test(text),
+          attributed_roles,
           choices: [
             { english: 'Could we push the deadline?', label: '締切延長' },
-            { english: 'Friday is too tight.', label: '金曜厳しい' },
-            { english: 'Can we cut the scope?', label: '範囲縮小' },
+            { english: 'Friday is too tight for us.', label: '金曜厳しい' },
+            { english: 'Can we reduce the scope first?', label: '範囲縮小' },
           ],
         }
       }
-      if (last.role === 'partner' && /(deadline|iterate|prototype|stakeholder|feasible)/.test(text)) {
+      if (/(deadline|iterate|prototype|stakeholder|feasible|mitigate)/.test(text)) {
         return {
           type: 'WORD',
           text: pickWord(last.text),
           ttl_ms: 4000,
+          continuation: false,
+          attributed_roles,
           choices: [],
         }
       }
-      return NONE
+      return {
+        ...NONE,
+        attributed_roles,
+      }
     },
 
-    async createRecap(transcriptWindow: TranscriptTurn[]): Promise<CoachDecision> {
-      const recentSpeaker = [...transcriptWindow]
+    async createRecap(transcriptWindow: TranscriptUtterance[]): Promise<CoachDecision> {
+      const recentLearner = [...transcriptWindow]
         .reverse()
-        .find(entry => entry.role === 'speaker' && /(uh|um|i want say|not sure|how to say)/i.test(entry.text))
+        .find(entry => /(uh|um|i want say|not sure|how to say|えっと|あの)/i.test(entry.text))
 
       return {
         type: 'RECAP',
-        text: recentSpeaker ? `Try: ${toMockRecap(recentSpeaker.text)}` : 'Try: Let me think for a second.',
+        text: recentLearner ? `Try: ${toMockRecap(recentLearner.text)}` : 'Try: Let me think for a second.',
         ttl_ms: 5000,
+        continuation: false,
+        attributed_roles: [],
         choices: [],
       }
     },
@@ -279,30 +309,46 @@ const NONE: CoachDecision = {
   text: '',
   ttl_ms: 0,
   choices: [],
+  continuation: false,
+  attributed_roles: [],
 }
 
-function sanitizeDecision(value: CoachDecision): CoachDecision {
+function sanitizeDecision(value: CoachDecision, expectedUtterances: number = 0): CoachDecision {
   if (!value || !['HINT', 'WORD', 'RECAP', 'NONE'].includes(value.type)) return NONE
-  const text = typeof value.text === 'string' ? value.text.trim().slice(0, 80) : ''
+  const text = typeof value.text === 'string' ? value.text.trim().slice(0, 120) : ''
   const ttl_ms = Number.isFinite(value.ttl_ms) ? Math.max(3500, Math.min(6000, value.ttl_ms)) : 0
-  const choices = Array.isArray(value.choices) ? value.choices.map(sanitizeChoice).filter(Boolean) as HintChoice[] : []
-  if (value.type === 'NONE') return NONE
+  const continuation = Boolean(value.continuation)
+  const attributed_roles = normalizeAttributedRoles(value.attributed_roles, expectedUtterances)
+  const choices = Array.isArray(value.choices) ? (value.choices.map(sanitizeChoice).filter(Boolean) as HintChoice[]) : []
+  if (value.type === 'NONE') return { ...NONE, attributed_roles }
   if (value.type === 'HINT') {
-    if (choices.length === 0) return NONE
+    if (choices.length === 0) return { ...NONE, attributed_roles }
     return {
       type: 'HINT',
       text: '',
       ttl_ms: hintTtlMsFromChoices(choices.length),
       choices,
+      continuation,
+      attributed_roles,
     }
   }
-  if (!text) return NONE
+  if (!text) return { ...NONE, attributed_roles }
   return {
     type: value.type,
     text,
     ttl_ms: ttl_ms || 3500,
     choices: [],
+    continuation: false,
+    attributed_roles,
   }
+}
+
+function normalizeAttributedRoles(value: AttributedRole[], expectedUtterances: number): AttributedRole[] {
+  const normalized = Array.isArray(value)
+    ? value.filter(role => role === 'learner' || role === 'partner')
+    : []
+  if (expectedUtterances <= 0) return normalized
+  return normalized.slice(0, expectedUtterances)
 }
 
 function sanitizeChoice(value: unknown): HintChoice | null {
@@ -320,8 +366,8 @@ function normalizeHintEnglish(text: string): string {
     .trim()
     .split(' ')
     .filter(Boolean)
-    .slice(0, 6)
-  return words.join(' ').slice(0, 56)
+    .slice(0, 10)
+  return words.join(' ').slice(0, 84)
 }
 
 function normalizeHintLabel(text: string): string {
@@ -335,6 +381,15 @@ function hintTtlMsFromChoices(choiceCount: number): number {
   if (choiceCount >= 3) return 6000
   if (choiceCount === 2) return 5500
   return 5000
+}
+
+function inferMockRoles(transcriptWindow: TranscriptUtterance[]): AttributedRole[] {
+  return transcriptWindow.map(entry => {
+    if (/[ぁ-んァ-ヶ一-龠]/.test(entry.text) || /\b(uh|um|how do you say|what's the word|i|we|my|our)\b/i.test(entry.text)) {
+      return 'learner'
+    }
+    return 'partner'
+  })
 }
 
 interface ResponsesPayload {
@@ -365,17 +420,18 @@ function readOutputText(data: ResponsesPayload): string {
 
 function pickWord(text: string): string {
   const lower = text.toLowerCase()
-  if (lower.includes('stakeholder')) return 'stakeholder = decision maker'
-  if (lower.includes('prototype')) return 'prototype = first draft'
-  if (lower.includes('iterate')) return 'iterate = try again'
-  if (lower.includes('feasible')) return 'feasible = can do'
-  if (lower.includes('deadline')) return 'deadline = due date'
-  return 'key word = simpler phrase'
+  if (lower.includes('stakeholder')) return 'The stakeholders need a clearer tradeoff.'
+  if (lower.includes('prototype')) return 'The prototype is still rough.'
+  if (lower.includes('iterate')) return 'We should iterate once more.'
+  if (lower.includes('feasible')) return 'Is that timeline still feasible for you?'
+  if (lower.includes('deadline')) return 'The deadline is tighter than expected.'
+  if (lower.includes('mitigate')) return 'We need to mitigate that risk first.'
+  return 'Can you say that in a simpler way?'
 }
 
 function toMockRecap(text: string): string {
   const lower = text.toLowerCase()
-  if (lower.includes('i want say')) return 'I mean to say…'
-  if (lower.includes('not sure')) return 'I am not sure yet.'
+  if (lower.includes('i want say')) return 'What I mean is...'
+  if (lower.includes('not sure')) return 'I am not sure how to explain it yet.'
   return 'Let me think for a second.'
 }

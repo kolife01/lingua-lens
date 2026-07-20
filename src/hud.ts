@@ -36,10 +36,10 @@ export function createHudRenderer(options: HudRendererOptions) {
     queueImage(heroLabel)
   }
 
-  async function renderQuiet(status: string): Promise<void> {
+  async function renderQuiet(status: string, aux: string = ''): Promise<void> {
     queueText('status', status)
     queueText('body', '')
-    queueText('aux', '')
+    queueText('aux', aux)
     queueImage('CLEAR')
   }
 

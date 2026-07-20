@@ -10,6 +10,8 @@ _Place the latest HUD screenshot in `docs/images/`._
 
 LinguaLens listens to a live conversation, transcribes it, decides whether a coaching intervention is actually needed, and only then shows a short card on the Even G2 HUD.
 
+Telemetry logs stay on the device by default and are only sent anywhere if the user explicitly sets a log endpoint.
+
 ## The Problem
 
 This project came from the author's own practice routine with GPT-Live. In English conversation practice, the hard moment is not after the session. It is the exact second when you know what you want to say, but cannot phrase it fast enough.

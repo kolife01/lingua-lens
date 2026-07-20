@@ -21,11 +21,14 @@ import {
   saveSessionLog,
 } from './storage'
 import {
+  bindTelemetryPanel,
+  downloadJsonFile,
   mountUi,
   renderSetupScreen,
   setBudgetStatus,
   setEngineState,
   setHudCard,
+  setTelemetryState,
   setSessionDebug,
   setNodDebug,
   setTranscript,
@@ -35,9 +38,10 @@ import {
 import {
   createCoachEngine,
   createMockCoachEngine,
+  type AttributedRole,
   type CoachDecision,
-  type TranscriptTurn,
   type CoachEngine,
+  type TranscriptUtterance,
 } from './coach'
 import { createHudRenderer } from './hud'
 import { createBatchTranscriber } from './asr/stt'
@@ -49,11 +53,12 @@ import {
 } from './demo'
 import { createNodDetector, type ImuSample } from './nod'
 import { INTERVENTION_MODEL, PRICING, RECAP_MODEL } from './models'
-import type { TelemetryLogger } from './telemetry'
+import { createTelemetryController, type StallReason as TelemetryStallReason } from './telemetry'
+import { detectImmediateStall, detectSilenceStall } from './stall'
 
 const bridge = await waitForEvenAppBridge()
 const budgetTracker = createDailyBudgetTracker(bridge)
-const telemetry = await loadTelemetryLogger()
+const telemetry = await createTelemetryController(bridge)
 
 const PAGE_ID = 1
 const STATUS_ID = 1
@@ -78,24 +83,17 @@ const HEARTBEAT_INTERVAL_MS = 250
 const NOD_TTL_EXTENSION_MS = 4000
 const VAD_RMS_THRESHOLD = 0.012
 const BACKGROUND_SYNC_DELAY_MS = 120
+const SINGLE_TAP_DELAY_MS = 400
+const MAX_TRANSCRIPT_ENTRIES = 12
+const HUD_HELP_TEXT = 'tap = help'
+const HUD_EXIT_HINT = 'double-tap = exit'
 
 type EngineMode = 'setup' | 'live' | 'demo'
-type TranscriptRole = 'speaker' | 'partner'
 
-interface RoleKeywordMatch {
-  keyword: string
-  matchedText: string
-}
-
-interface RoleInferenceResult {
-  role: TranscriptRole
-  rule: string
-  matches: RoleKeywordMatch[]
-}
-
-interface TranscriptEntry extends TranscriptTurn {
+interface TranscriptEntry extends TranscriptUtterance {
   id: string
   createdAt: number
+  attributedRole?: AttributedRole
 }
 
 interface BackgroundCapableBridge {
@@ -104,6 +102,24 @@ interface BackgroundCapableBridge {
 }
 
 mountUi()
+bindTelemetryPanel({
+  onEnabledChange: async enabled => {
+    await telemetry.updateSettings({ enabled })
+  },
+  onEndpointChange: async endpointUrl => {
+    await telemetry.updateSettings({ endpointUrl })
+  },
+  onExport: () => {
+    const exportedAt = new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-')
+    downloadJsonFile(
+      `lingualens-telemetry-${exportedAt}.json`,
+      JSON.stringify(telemetry.exportEvents(), null, 2),
+    )
+  },
+  onClear: async () => {
+    await telemetry.clear()
+  },
+})
 
 const hud = createHudRenderer({
   bridge,
@@ -119,7 +135,7 @@ let mode: EngineMode = DEMO_MODE ? 'demo' : 'live'
 let apiKey = ''
 let coach: CoachEngine | null = null
 let transcriptLog: TranscriptEntry[] = []
-let activeCard: CoachDecision = { type: 'NONE', text: '', ttl_ms: 0, choices: [] }
+let activeCard: CoachDecision = createEmptyDecision()
 let activeCardDisplayText = ''
 let shutdownStarted = false
 let lastSavedLog: SessionLogEntry[] = []
@@ -142,12 +158,23 @@ let backgroundSyncTimer: number | null = null
 let backgroundStatus = 'idle'
 let latestRestoredAt = 0
 let budgetSnapshot: BudgetSnapshot | null = null
+let pendingHelpTapTimer: number | null = null
+const handledStallKeys = new Set<string>()
 const decisionUsageQueue: Array<{ model: string; inputTokens: number; outputTokens: number }> = []
 const recapUsageQueue: Array<{ model: string; inputTokens: number; outputTokens: number }> = []
 
 const backgroundBridge = createBackgroundSessionBridge(bridge)
 const unsubscribeBackgroundRestore = backgroundBridge.onRestore(state => {
   void restoreSessionState(state)
+})
+const unsubscribeTelemetry = telemetry.subscribe(snapshot => {
+  setTelemetryState({
+    enabled: snapshot.settings.enabled,
+    endpointUrl: snapshot.settings.endpointUrl,
+    eventCount: snapshot.stats.eventCount,
+    approximateBytes: snapshot.stats.approximateBytes,
+    endpointSuggestion: import.meta.env.DEV ? 'http://localhost:5173/__log' : '',
+  })
 })
 
 window.setInterval(runHeartbeat, HEARTBEAT_INTERVAL_MS)
@@ -212,7 +239,7 @@ async function initializePage(): Promise<void> {
     paddingLength: 0,
     containerID: AUX_ID,
     containerName: 'aux',
-    content: 'Double-tap to exit',
+    content: `${HUD_HELP_TEXT} · ${HUD_EXIT_HINT}`,
   })
   const hero = new ImageContainerProperty({
     xPosition: 368,
@@ -294,7 +321,7 @@ async function enterSetup(): Promise<void> {
   await hud.renderIdle(
     'SETUP',
     'Enter OpenAI key\non phone once.',
-    lastSavedLog[0]?.text ? `Last recap: ${lastSavedLog[0].text}` : 'No recap yet',
+    buildHudAux(lastSavedLog[0]?.text ? `Last recap: ${lastSavedLog[0].text}` : 'No recap yet'),
     'SETUP',
   )
   backgroundStatus = 'setup armed'
@@ -305,6 +332,7 @@ async function enterSetup(): Promise<void> {
 async function startLive(restored?: BackgroundSessionState): Promise<void> {
   mode = 'live'
   shutdownStarted = false
+  resetSessionBuffers()
   budgetSnapshot = await budgetTracker.getSnapshot()
   renderBudgetPanel()
   coach = FORCE_MOCK
@@ -323,40 +351,29 @@ async function startLive(restored?: BackgroundSessionState): Promise<void> {
         },
       })
   transcriptLog = restored ? restoreTranscriptEntries(restored.transcriptLog) : []
-  activeCard = restored ? restoreCoachCard(restored.activeCard) : { type: 'NONE', text: '', ttl_ms: 0, choices: [] }
-  activeCardDisplayText = ''
-  activeCardShownAt = 0
-  activeCardShownWallClock = 0
-  activeCardAuxText = ''
-  lastSpeechAt = 0
-  recapCycleToken = 0
-  recapTriggeredToken = -1
-  recapTriggerSourceIsDemo = false
-  demoLoopIndex = 0
-  demoInjectedCount = 0
-  demoHeartbeatStartAt = 0
+  activeCard = restored ? restoreCoachCard(restored.activeCard) : createEmptyDecision()
+  if (restored) {
+    lastSavedLog = restored.learningLog
+  }
   setEngineState(
     budgetSnapshot?.reached ? 'error' : 'listening',
     budgetSnapshot?.reached ? 'Daily budget reached' : FORCE_MOCK ? 'Live mic · mock coach' : 'Live mic · OpenAI coach',
   )
-  if (restored) {
-    lastSavedLog = restored.learningLog
-  }
   renderTranscriptPanel(restored ? 'Session restored from background' : lastSavedLog[0]?.text ? `Previous recap: ${lastSavedLog[0].text}` : 'Listening for speech')
   if (activeCard.type !== 'NONE') {
     await presentDecision('RESTORED', activeCard)
   } else if (lastSavedLog[0]?.type === 'RECAP' && lastSavedLog[0]?.text) {
     await presentDecision('RECAP', {
+      ...createEmptyDecision(),
       type: 'RECAP',
       text: lastSavedLog[0].text,
       ttl_ms: 5000,
-      choices: [],
     })
   } else {
     await hud.renderIdle(
       budgetSnapshot?.reached ? 'Daily budget reached' : 'LIVE',
       'Listening…',
-      budgetSnapshot?.reached ? `Remaining ${formatUsd(budgetSnapshot.remainingUsd)}` : FORCE_MOCK ? 'Mock coach active' : 'GPT coach active',
+      buildHudAux(FORCE_MOCK ? 'Mock coach active' : 'GPT coach active'),
       'LIVE',
     )
     setHudCard('NONE', 'No intervention')
@@ -367,25 +384,29 @@ async function startLive(restored?: BackgroundSessionState): Promise<void> {
 
   const transcriber = createBatchTranscriber({
     apiKey,
+    getPromptContext: () => buildAsrPromptContext(transcriptLog),
     onTranscript: async result => {
       const normalized = normalizeTranscriptText(result.text)
       if (!normalized) return
-      const roleInference = inferLiveRole(normalized)
+      const endedAtMs = Date.now()
+      const startedAtMs = endedAtMs - result.bufferedMs
+      const entry = createTranscriptEntry(normalized, startedAtMs, endedAtMs)
       telemetry.log('asr', {
         transcript: normalized,
-        role: roleInference.role,
-        roleInference: {
-          rule: roleInference.rule,
-          matches: roleInference.matches,
+        utterance: {
+          startedAt: entry.startedAt,
+          endedAt: entry.endedAt,
+          gapBeforeMs: entry.gapBeforeMs,
         },
         rms: roundNumber(result.rms, 4),
         asrLatencyMs: result.latencyMs,
         audioSeconds: roundNumber(result.audioSeconds, 3),
         bufferedMs: result.bufferedMs,
         model: result.model,
+        promptContext: result.promptContext,
         source: 'live',
       })
-      await registerTranscript(roleInference.role, normalized, false)
+      await registerTranscript(entry, false)
     },
     onVadDebug: info => {
       setVadDebug(info)
@@ -425,6 +446,7 @@ async function startLive(restored?: BackgroundSessionState): Promise<void> {
 async function startDemo(restored?: BackgroundSessionState): Promise<void> {
   mode = 'demo'
   shutdownStarted = false
+  resetSessionBuffers()
   budgetSnapshot = await budgetTracker.getSnapshot()
   renderBudgetPanel()
   coach = apiKey && !FORCE_MOCK
@@ -441,11 +463,7 @@ async function startDemo(restored?: BackgroundSessionState): Promise<void> {
       })
     : createMockCoachEngine()
   transcriptLog = restored ? restoreTranscriptEntries(restored.transcriptLog) : []
-  activeCard = restored ? restoreCoachCard(restored.activeCard) : { type: 'NONE', text: '', ttl_ms: 0, choices: [] }
-  activeCardDisplayText = ''
-  activeCardShownAt = 0
-  activeCardShownWallClock = 0
-  activeCardAuxText = ''
+  activeCard = restored ? restoreCoachCard(restored.activeCard) : createEmptyDecision()
   const engineLabel = apiKey && !FORCE_MOCK ? 'Demo script · GPT coach' : 'Demo script · mock coach'
   setEngineState('connecting', engineLabel)
   if (restored) {
@@ -455,7 +473,7 @@ async function startDemo(restored?: BackgroundSessionState): Promise<void> {
   if (activeCard.type !== 'NONE') {
     await presentDecision('RESTORED', activeCard)
   } else {
-    await hud.renderIdle('DEMO', 'Injecting scripted turns…', engineLabel, 'DEMO')
+    await hud.renderIdle('DEMO', 'Injecting scripted turns…', buildHudAux(engineLabel), 'DEMO')
     setHudCard('NONE', 'No intervention')
   }
 
@@ -479,6 +497,10 @@ async function startDemo(restored?: BackgroundSessionState): Promise<void> {
 async function endSession(): Promise<void> {
   if (shutdownStarted) return
   shutdownStarted = true
+  if (pendingHelpTapTimer !== null) {
+    window.clearTimeout(pendingHelpTapTimer)
+    pendingHelpTapTimer = null
+  }
   try {
     await bridge.audioControl(false)
   } catch {
@@ -486,14 +508,10 @@ async function endSession(): Promise<void> {
   }
   await setNodMonitoring(false)
   await persistLatestRecap()
+  await telemetry.flush()
   await saveBackgroundState(bridge, null)
   activePcmHandler = null
   activeShutdownHandler = null
-  activeCardDisplayText = ''
-  activeCardShownAt = 0
-  activeCardShownWallClock = 0
-  activeCardAuxText = ''
-  lastSpeechAt = 0
   backgroundStatus = 'cleared'
   refreshSessionDebug()
 }
@@ -522,7 +540,15 @@ function attachRootEvents(): void {
       void restoreSessionFromStorage()
     }
 
+    if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) {
+      scheduleHelpTap()
+    }
+
     if (sysType === OsEventTypeList.DOUBLE_CLICK_EVENT || textType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
+      if (pendingHelpTapTimer !== null) {
+        window.clearTimeout(pendingHelpTapTimer)
+        pendingHelpTapTimer = null
+      }
       backgroundStatus = 'closing'
       void saveBackgroundState(bridge, null)
       void bridge.shutDownPageContainer(PAGE_ID)
@@ -540,6 +566,8 @@ function attachRootEvents(): void {
     () => {
       unsubscribe()
       unsubscribeBackgroundRestore()
+      unsubscribeTelemetry()
+      void telemetry.flush()
       void persistBackgroundState()
     },
     { once: true },
@@ -552,46 +580,148 @@ function attachRootEvents(): void {
   })
 }
 
-async function registerTranscript(role: TranscriptRole, text: string, fromDemo: boolean): Promise<void> {
-  const entry: TranscriptEntry = {
-    id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
-    role,
-    text,
-    timestamp: new Date().toISOString(),
-    createdAt: Date.now(),
+function scheduleHelpTap(): void {
+  if (pendingHelpTapTimer !== null) {
+    window.clearTimeout(pendingHelpTapTimer)
   }
+  pendingHelpTapTimer = window.setTimeout(() => {
+    pendingHelpTapTimer = null
+    void triggerExplicitHelp()
+  }, SINGLE_TAP_DELAY_MS)
+}
 
-  transcriptLog = [...transcriptLog, entry].slice(-12)
+async function triggerExplicitHelp(): Promise<void> {
+  const lastEntry = transcriptLog[transcriptLog.length - 1] ?? null
+  telemetry.log('stall', {
+    action: 'triggered',
+    reason: 'explicit_tap',
+    utterance: lastEntry
+      ? {
+          text: lastEntry.text,
+          startedAt: lastEntry.startedAt,
+          endedAt: lastEntry.endedAt,
+          gapBeforeMs: lastEntry.gapBeforeMs,
+        }
+      : null,
+    source: toSessionSource(mode),
+  })
+  await requestCoachDecision('explicit_tap', 'explicit_tap', mode === 'demo')
+}
+
+async function registerTranscript(entry: TranscriptEntry, fromDemo: boolean): Promise<void> {
+  transcriptLog = [...transcriptLog, entry].slice(-MAX_TRANSCRIPT_ENTRIES)
   lastSpeechAt = performance.now()
   recapCycleToken += 1
   recapTriggerSourceIsDemo = fromDemo
-  const speakerLabel = role === 'speaker' ? 'You' : 'Partner'
-  setTranscriptMeta(fromDemo ? 'Demo timeline active' : 'Mic chunks transcribed in short windows')
   renderTranscriptPanel(fromDemo ? 'Demo timeline active' : 'Mic chunks transcribed in short windows')
   scheduleBackgroundSync()
 
+  const immediateTrigger = detectImmediateStall(entry.text)
+  if (immediateTrigger) {
+    telemetry.log('stall', {
+      action: 'triggered',
+      reason: immediateTrigger.reason,
+      utterance: {
+        text: entry.text,
+        startedAt: entry.startedAt,
+        endedAt: entry.endedAt,
+        gapBeforeMs: entry.gapBeforeMs,
+      },
+      matchedText: immediateTrigger.matchedText,
+      matchedWord: immediateTrigger.matchedWord,
+      source: toSessionSource(mode),
+    })
+    await requestCoachDecision('stall', immediateTrigger.reason, fromDemo)
+    return
+  }
+
+  telemetry.log('stall', {
+    action: 'skipped',
+    reason: 'no_trigger_match',
+    utterance: {
+      text: entry.text,
+      startedAt: entry.startedAt,
+      endedAt: entry.endedAt,
+      gapBeforeMs: entry.gapBeforeMs,
+    },
+    source: toSessionSource(mode),
+  })
+}
+
+async function requestCoachDecision(
+  trigger: 'stall' | 'explicit_tap',
+  reason: TelemetryStallReason,
+  fromDemo: boolean,
+): Promise<void> {
   const currentCoach = coach
-  if (!currentCoach) return
-  if (!fromDemo && !FORCE_MOCK && !(await canStartLiveApiCall())) return
+  const latestEntry = transcriptLog[transcriptLog.length - 1] ?? null
+  if (trigger === 'stall' && latestEntry) {
+    handledStallKeys.add(`${latestEntry.id}:decision`)
+  }
+  if (!currentCoach || transcriptLog.length === 0) {
+    telemetry.log('stall', {
+      action: 'skipped',
+      reason: 'coach_unavailable',
+      utterance: transcriptLog[transcriptLog.length - 1]
+        ? {
+            text: transcriptLog[transcriptLog.length - 1]!.text,
+            startedAt: transcriptLog[transcriptLog.length - 1]!.startedAt,
+            endedAt: transcriptLog[transcriptLog.length - 1]!.endedAt,
+            gapBeforeMs: transcriptLog[transcriptLog.length - 1]!.gapBeforeMs,
+          }
+        : null,
+      source: toSessionSource(mode),
+    })
+    return
+  }
+
+  if (!fromDemo && !FORCE_MOCK && !(await canStartLiveApiCall())) {
+    telemetry.log('stall', {
+      action: 'skipped',
+      reason: 'budget_reached',
+      utterance: transcriptLog[transcriptLog.length - 1]
+        ? {
+            text: transcriptLog[transcriptLog.length - 1]!.text,
+            startedAt: transcriptLog[transcriptLog.length - 1]!.startedAt,
+            endedAt: transcriptLog[transcriptLog.length - 1]!.endedAt,
+            gapBeforeMs: transcriptLog[transcriptLog.length - 1]!.gapBeforeMs,
+          }
+        : null,
+      source: toSessionSource(mode),
+    })
+    return
+  }
 
   try {
     const startedAt = performance.now()
     const decision = await currentCoach.decide({
       mode,
-      transcriptWindow: transcriptLog,
+      transcriptWindow: transcriptLog.map(toTranscriptUtterance),
       previousCard: activeCard,
+      trigger,
+      triggerReason: reason,
     })
+    applyAttributedRoles(decision.attributed_roles)
     const latencyMs = Math.round(performance.now() - startedAt)
     const usage = takeUsageReport(decisionUsageQueue)
     telemetry.log('decision', {
-      trigger: 'transcript',
-      transcriptWindow: transcriptLog.map(item => ({ role: item.role, text: item.text, timestamp: item.timestamp })),
+      trigger,
+      triggerReason: reason,
+      transcriptWindow: transcriptLog.map(item => ({
+        attributedRole: item.attributedRole,
+        text: item.text,
+        startedAt: item.startedAt,
+        endedAt: item.endedAt,
+        gapBeforeMs: item.gapBeforeMs,
+      })),
       model: usage?.model ?? (fromDemo ? (apiKey && !FORCE_MOCK ? INTERVENTION_MODEL : 'mock-coach') : FORCE_MOCK ? 'mock-coach' : INTERVENTION_MODEL),
       decision: {
         type: decision.type,
         text: decision.text,
         choices: decision.choices.map(choice => ({ ...choice })),
         ttl_ms: decision.ttl_ms,
+        continuation: decision.continuation,
+        attributed_roles: [...decision.attributed_roles],
       },
       latencyMs,
       estimatedCostUsd: usage ? estimateResponseCostUsd(usage.model, usage.inputTokens, usage.outputTokens) : 0,
@@ -601,7 +731,7 @@ async function registerTranscript(role: TranscriptRole, text: string, fromDemo: 
       },
       source: toSessionSource(mode),
     })
-    await renderDecision(speakerLabel, decision)
+    await renderDecision(trigger === 'explicit_tap' ? 'TAP' : `STALL ${formatReason(reason)}`, decision)
   } catch (err) {
     console.error('Coach error:', err)
     setEngineState('error', `Coach: ${getErrorMessage(err)}`)
@@ -627,7 +757,7 @@ async function presentDecision(sourceLabel: string, decision: CoachDecision): Pr
   activeCardShownAt = performance.now()
   activeCardShownWallClock = Date.now()
   const body = activeCardDisplayText
-  const aux = `${sourceLabel} · ${decision.ttl_ms}ms`
+  const aux = buildHudAux(`${sourceLabel} · ${decision.ttl_ms}ms`)
   activeCardAuxText = aux
   await hud.renderCard(decision.type, body, aux)
   setHudCard(decision.type, body)
@@ -650,14 +780,14 @@ async function renderQuiet(status: string, reason: string = 'quiet'): Promise<vo
   const previousAux = activeCardAuxText
   const displayedAt = activeCardShownWallClock ? new Date(activeCardShownWallClock).toISOString() : new Date().toISOString()
   const quietAt = new Date().toISOString()
-  activeCard = { type: 'NONE', text: '', ttl_ms: 0, choices: [] }
+  activeCard = createEmptyDecision()
   activeCardDisplayText = ''
   activeCardShownAt = 0
   activeCardShownWallClock = 0
   activeCardAuxText = ''
-  await hud.renderQuiet(getHudStatusLabel(status))
+  await hud.renderQuiet(getHudStatusLabel(status), buildHudAux())
   if (mode === 'live' && budgetSnapshot?.reached) {
-    await hud.renderStatus('Daily budget reached', `Remaining ${formatUsd(budgetSnapshot.remainingUsd)}`)
+    await hud.renderStatus('Daily budget reached', buildHudAux(`Remaining ${formatUsd(budgetSnapshot.remainingUsd)}`))
   }
   setHudCard('NONE', 'No intervention')
   telemetry.log('hud', {
@@ -683,9 +813,9 @@ async function handleNodGesture(): Promise<void> {
       ...activeCard,
       ttl_ms: activeCard.ttl_ms + NOD_TTL_EXTENSION_MS,
     }
-    await hud.renderCard(activeCard.type, activeCardDisplayText || activeCard.text, `NOD · ${activeCard.ttl_ms}ms`)
+    activeCardAuxText = buildHudAux(`NOD · ${activeCard.ttl_ms}ms`)
+    await hud.renderCard(activeCard.type, activeCardDisplayText || activeCard.text, activeCardAuxText)
     setHudCard(activeCard.type, activeCardDisplayText || activeCard.text)
-    activeCardAuxText = `NOD · ${activeCard.ttl_ms}ms`
     telemetry.log('nod', {
       event: 'extend_active_card',
       activeCardType: activeCard.type,
@@ -705,10 +835,10 @@ async function handleNodGesture(): Promise<void> {
     source: toSessionSource(mode),
   })
   await presentDecision('RECAP nod', {
+    ...createEmptyDecision(),
     type: 'RECAP',
     text: recapText,
     ttl_ms: 5000,
-    choices: [],
   })
 }
 
@@ -723,23 +853,31 @@ async function triggerRecap(fromDemo: boolean): Promise<void> {
   telemetry.log('recap_flow', {
     stage: 'request_started',
     silenceMs: RECAP_SILENCE_MS,
-    lastTranscriptAt: lastEntry.timestamp,
+    lastTranscriptAt: lastEntry.endedAt,
     triggerToken: recapCycleToken,
     source: fromDemo ? 'demo' : 'live',
   })
   try {
-    const decision = await coach.createRecap(transcriptLog)
+    const decision = await coach.createRecap(transcriptLog.map(toTranscriptUtterance))
     const latencyMs = Math.round(performance.now() - startedAt)
     const usage = takeUsageReport(recapUsageQueue)
     telemetry.log('decision', {
       trigger: 'recap',
-      transcriptWindow: transcriptLog.map(item => ({ role: item.role, text: item.text, timestamp: item.timestamp })),
+      transcriptWindow: transcriptLog.map(item => ({
+        attributedRole: item.attributedRole,
+        text: item.text,
+        startedAt: item.startedAt,
+        endedAt: item.endedAt,
+        gapBeforeMs: item.gapBeforeMs,
+      })),
       model: usage?.model ?? (apiKey && !FORCE_MOCK ? RECAP_MODEL : 'mock-coach'),
       decision: {
         type: decision.type,
         text: decision.text,
         choices: [],
         ttl_ms: decision.ttl_ms,
+        continuation: false,
+        attributed_roles: [],
       },
       latencyMs,
       estimatedCostUsd: usage ? estimateResponseCostUsd(usage.model, usage.inputTokens, usage.outputTokens) : 0,
@@ -754,19 +892,21 @@ async function triggerRecap(fromDemo: boolean): Promise<void> {
       ...transcriptLog,
       {
         id: `${Date.now()}-recap`,
-        role: 'speaker' as const,
         text: `[RECAP] ${decision.text}`,
-        timestamp: new Date().toISOString(),
+        startedAt: new Date().toISOString(),
+        endedAt: new Date().toISOString(),
+        gapBeforeMs: 0,
+        attributedRole: 'learner' as const,
         createdAt: Date.now(),
       },
-    ].slice(-12)
+    ].slice(-MAX_TRANSCRIPT_ENTRIES)
     setTranscriptMeta(fromDemo ? 'Demo timeline active · recap pause' : 'Silence recap generated')
     renderTranscriptPanel(fromDemo ? 'Demo timeline active · recap pause' : 'Silence recap generated')
     lastSavedLog = [{ type: 'RECAP', text: decision.text, createdAt: Date.now() }]
     telemetry.log('recap_flow', {
       stage: 'request_completed',
       silenceMs: RECAP_SILENCE_MS,
-      lastTranscriptAt: lastEntry.timestamp,
+      lastTranscriptAt: lastEntry.endedAt,
       triggerToken: recapCycleToken,
       source: fromDemo ? 'demo' : 'live',
       latencyMs,
@@ -778,7 +918,7 @@ async function triggerRecap(fromDemo: boolean): Promise<void> {
     telemetry.log('recap_flow', {
       stage: 'request_failed',
       silenceMs: RECAP_SILENCE_MS,
-      lastTranscriptAt: lastEntry.timestamp,
+      lastTranscriptAt: lastEntry.endedAt,
       triggerToken: recapCycleToken,
       source: fromDemo ? 'demo' : 'live',
       latencyMs: Math.round(performance.now() - startedAt),
@@ -800,13 +940,43 @@ function runHeartbeat(): void {
     if (dueItems.length > 0) {
       demoInjectedCount += dueItems.length
       for (const item of dueItems) {
-        void registerTranscript(item.role, item.text, true)
+        const endedAtMs = Date.now()
+        const estimatedDurationMs = Math.max(600, Math.min(2400, item.text.length * 45))
+        void registerTranscript(createTranscriptEntry(item.text, endedAtMs - estimatedDurationMs, endedAtMs), true)
       }
     }
   }
 
   if (activeCard.type !== 'NONE' && activeCardShownAt > 0 && now - activeCardShownAt >= activeCard.ttl_ms) {
     void renderQuiet(mode === 'demo' ? 'DEMO quiet' : 'LIVE quiet', 'ttl_expired')
+  }
+
+  const lastEntry = transcriptLog[transcriptLog.length - 1]
+  if (lastEntry && !lastEntry.text.startsWith('[RECAP] ')) {
+    if (handledStallKeys.has(`${lastEntry.id}:decision`)) {
+      return
+    }
+    const silenceMs = Math.max(0, Math.round(now - lastSpeechAt))
+    const silenceTrigger = detectSilenceStall(lastEntry.text, silenceMs)
+    if (silenceTrigger) {
+      const key = `${lastEntry.id}:${silenceTrigger.reason}`
+      if (!handledStallKeys.has(key)) {
+        handledStallKeys.add(key)
+        telemetry.log('stall', {
+          action: 'triggered',
+          reason: silenceTrigger.reason,
+          utterance: {
+            text: lastEntry.text,
+            startedAt: lastEntry.startedAt,
+            endedAt: lastEntry.endedAt,
+            gapBeforeMs: lastEntry.gapBeforeMs,
+          },
+          silenceMs,
+          source: toSessionSource(mode),
+        })
+        void requestCoachDecision('stall', silenceTrigger.reason, mode === 'demo')
+      }
+    }
   }
 
   if (
@@ -819,7 +989,7 @@ function runHeartbeat(): void {
     telemetry.log('recap_flow', {
       stage: 'silence_detected',
       silenceMs: RECAP_SILENCE_MS,
-      lastTranscriptAt: transcriptLog[transcriptLog.length - 1]?.timestamp,
+      lastTranscriptAt: transcriptLog[transcriptLog.length - 1]?.endedAt,
       triggerToken: recapCycleToken,
       source: recapTriggerSourceIsDemo ? 'demo' : 'live',
     })
@@ -842,32 +1012,6 @@ function updateDemoLoop(now: number): number {
 
 function normalizeTranscriptText(text: string): string {
   return text.replace(/\s+/g, ' ').trim()
-}
-
-function inferLiveRole(text: string): RoleInferenceResult {
-  const lower = text.toLowerCase()
-  const previousRole = transcriptLog[transcriptLog.length - 1]?.role
-  const partnerMatches = findKeywordMatches(lower, ['could you', 'can you', 'do you', 'is it', 'are you', 'what', 'why', 'when', 'deadline', 'stakeholder'])
-  if (partnerMatches.length > 0) {
-    return {
-      role: 'partner',
-      rule: 'partner_keywords',
-      matches: partnerMatches,
-    }
-  }
-  const speakerMatches = findKeywordMatches(lower, ['i ', 'we ', 'my ', 'our ', 'let me', "i'm", 'i am', 'uh', 'um'])
-  if (speakerMatches.length > 0) {
-    return {
-      role: 'speaker',
-      rule: 'speaker_keywords',
-      matches: speakerMatches,
-    }
-  }
-  return {
-    role: previousRole === 'speaker' ? 'partner' : 'speaker',
-    rule: previousRole === 'speaker' ? 'alternating_after_speaker' : 'alternating_default_speaker',
-    matches: [],
-  }
 }
 
 function getErrorMessage(err: unknown): string {
@@ -900,13 +1044,15 @@ async function setNodMonitoring(shouldEnable: boolean): Promise<void> {
 
 function buildCardBody(decision: CoachDecision): string {
   if (decision.type !== 'HINT') return decision.text
-  return decision.choices.map((choice, index) => `${index + 1} ${choice.english} · ${choice.label}`).join('\n')
+  return decision.choices
+    .map((choice, index) => `${index + 1} ${decision.continuation ? '…' : ''}${choice.english} · ${choice.label}`)
+    .join('\n')
 }
 
 function findLatestRecapText(): string | null {
   const latestFromSession = [...transcriptLog]
     .reverse()
-    .find(entry => entry.role === 'speaker' && entry.text.startsWith('[RECAP] '))
+    .find(entry => entry.text.startsWith('[RECAP] '))
   if (latestFromSession) {
     return latestFromSession.text.replace(/^\[RECAP\]\s*/, '').trim() || null
   }
@@ -915,7 +1061,9 @@ function findLatestRecapText(): string | null {
 }
 
 function renderTranscriptPanel(metaText: string): void {
-  const transcriptView = transcriptLog.map(item => `${item.role === 'speaker' ? 'You' : 'Them'}: ${item.text}`).join('\n')
+  const transcriptView = transcriptLog
+    .map(item => `${formatTranscriptRole(item.attributedRole)}: ${item.text}`)
+    .join('\n')
   setTranscript(transcriptView, '')
   setTranscriptMeta(metaText)
   refreshSessionDebug()
@@ -952,7 +1100,7 @@ async function syncBudgetSnapshot(nextSnapshot: BudgetSnapshot): Promise<void> {
 async function announceBudgetReached(): Promise<void> {
   if (!budgetSnapshot?.reached || mode !== 'live') return
   setEngineState('error', 'Daily budget reached')
-  await hud.renderStatus('Daily budget reached', `Remaining ${formatUsd(budgetSnapshot.remainingUsd)}`)
+  await hud.renderStatus('Daily budget reached', buildHudAux(`Remaining ${formatUsd(budgetSnapshot.remainingUsd)}`))
 }
 
 function renderBudgetPanel(): void {
@@ -1031,16 +1179,34 @@ async function restoreSessionState(snapshot: BackgroundSessionState): Promise<bo
 }
 
 function restoreTranscriptEntries(entries: PersistedTranscriptEntry[]): TranscriptEntry[] {
-  return Array.isArray(entries) ? entries.slice(-12).map(entry => ({ ...entry })) : []
+  if (!Array.isArray(entries)) return []
+  return entries.slice(-MAX_TRANSCRIPT_ENTRIES).map((entry, index) => {
+    const fallbackTimestamp = entry.timestamp ?? new Date(Date.now() - (MAX_TRANSCRIPT_ENTRIES - index) * 1000).toISOString()
+    return {
+      id: entry.id ?? `${Date.now()}-${index}`,
+      text: entry.text,
+      startedAt: entry.startedAt ?? fallbackTimestamp,
+      endedAt: entry.endedAt ?? fallbackTimestamp,
+      gapBeforeMs: typeof entry.gapBeforeMs === 'number' ? entry.gapBeforeMs : 0,
+      attributedRole:
+        entry.attributedRole ??
+        (entry.role === 'speaker' ? 'learner' : entry.role === 'partner' ? 'partner' : undefined),
+      createdAt: entry.createdAt ?? Date.now(),
+    }
+  })
 }
 
 function restoreCoachCard(card: PersistedCoachCard | null | undefined): CoachDecision {
-  if (!card) return { type: 'NONE', text: '', ttl_ms: 0, choices: [] }
+  if (!card) return createEmptyDecision()
   return {
     type: card.type,
     text: card.text,
     ttl_ms: card.ttl_ms,
     choices: Array.isArray(card.choices) ? card.choices.map(choice => ({ ...choice })) : [],
+    continuation: Boolean(card.continuation),
+    attributed_roles: Array.isArray(card.attributed_roles)
+      ? card.attributed_roles.filter(role => role === 'learner' || role === 'partner')
+      : [],
   }
 }
 
@@ -1050,13 +1216,15 @@ function toPersistedCoachCard(card: CoachDecision): PersistedCoachCard {
     text: card.text,
     ttl_ms: card.ttl_ms,
     choices: card.choices.map(choice => ({ ...choice })),
+    continuation: card.continuation,
+    attributed_roles: [...card.attributed_roles],
   }
 }
 
 async function persistLatestRecap(): Promise<void> {
   const latestRecap = [...transcriptLog]
     .reverse()
-    .find(entry => entry.role === 'speaker' && entry.text.startsWith('[RECAP] '))
+    .find(entry => entry.text.startsWith('[RECAP] '))
   if (!latestRecap) return
   lastSavedLog = [{ type: 'RECAP', text: latestRecap.text.replace(/^\[RECAP\]\s*/, '').slice(0, 120), createdAt: Date.now() }]
   await saveSessionLog(bridge, lastSavedLog)
@@ -1119,16 +1287,6 @@ function parseBackgroundPayload(raw: string | undefined): BackgroundSessionState
   }
 }
 
-async function loadTelemetryLogger(): Promise<TelemetryLogger> {
-  if (!import.meta.env.DEV) {
-    return {
-      log: () => {},
-    }
-  }
-  const module = await import('./telemetry')
-  return module.createTelemetryLogger()
-}
-
 function takeUsageReport(queue: Array<{ model: string; inputTokens: number; outputTokens: number }>) {
   return queue.shift() ?? null
 }
@@ -1139,14 +1297,6 @@ function estimateResponseCostUsd(model: string, inputTokens: number, outputToken
   const inputCost = ((pricing.inputUsdPerMillionTokens ?? 0) * Math.max(0, inputTokens)) / 1_000_000
   const outputCost = ((pricing.outputUsdPerMillionTokens ?? 0) * Math.max(0, outputTokens)) / 1_000_000
   return roundNumber(inputCost + outputCost, 6)
-}
-
-function findKeywordMatches(text: string, keywords: string[]): RoleKeywordMatch[] {
-  return keywords.flatMap(keyword => {
-    const index = text.indexOf(keyword)
-    if (index === -1) return []
-    return [{ keyword, matchedText: text.slice(index, index + keyword.length) }]
-  })
 }
 
 function roundNumber(value: number, digits: number): number {
@@ -1160,4 +1310,85 @@ function toSessionSource(currentMode: EngineMode): 'live' | 'demo' {
 
 function formatUsd(value: number): string {
   return `$${value.toFixed(2)}`
+}
+
+function createTranscriptEntry(text: string, startedAtMs: number, endedAtMs: number): TranscriptEntry {
+  const previousEndedAt = transcriptLog[transcriptLog.length - 1] ? Date.parse(transcriptLog[transcriptLog.length - 1]!.endedAt) : NaN
+  const normalizedStart = Math.max(0, Math.min(startedAtMs, endedAtMs))
+  const gapBeforeMs = Number.isFinite(previousEndedAt) ? Math.max(0, Math.round(normalizedStart - previousEndedAt)) : 0
+  return {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    text,
+    startedAt: new Date(normalizedStart).toISOString(),
+    endedAt: new Date(endedAtMs).toISOString(),
+    gapBeforeMs,
+    createdAt: Date.now(),
+  }
+}
+
+function applyAttributedRoles(attributedRoles: AttributedRole[]): void {
+  if (attributedRoles.length === 0) return
+  transcriptLog = transcriptLog.map((entry, index) => ({
+    ...entry,
+    attributedRole: attributedRoles[index] ?? entry.attributedRole,
+  }))
+  renderTranscriptPanel(mode === 'demo' ? 'Demo timeline active' : 'Mic chunks transcribed in short windows')
+}
+
+function toTranscriptUtterance(entry: TranscriptEntry): TranscriptUtterance {
+  return {
+    text: entry.text,
+    startedAt: entry.startedAt,
+    endedAt: entry.endedAt,
+    gapBeforeMs: entry.gapBeforeMs,
+  }
+}
+
+function formatTranscriptRole(role: AttributedRole | undefined): string {
+  if (role === 'learner') return 'You'
+  if (role === 'partner') return 'Them'
+  return '?'
+}
+
+function createEmptyDecision(): CoachDecision {
+  return {
+    type: 'NONE',
+    text: '',
+    ttl_ms: 0,
+    choices: [],
+    continuation: false,
+    attributed_roles: [],
+  }
+}
+
+function buildHudAux(primary?: string): string {
+  return primary ? `${primary} · ${HUD_HELP_TEXT}` : `${HUD_HELP_TEXT} · ${HUD_EXIT_HINT}`
+}
+
+function buildAsrPromptContext(entries: TranscriptEntry[]): string {
+  const joined = entries
+    .slice(-4)
+    .map(entry => entry.text)
+    .join(' / ')
+    .trim()
+  if (joined.length <= 200) return joined
+  return joined.slice(-200)
+}
+
+function resetSessionBuffers(): void {
+  transcriptLog = []
+  activeCard = createEmptyDecision()
+  activeCardDisplayText = ''
+  activeCardShownAt = 0
+  activeCardShownWallClock = 0
+  activeCardAuxText = ''
+  lastSpeechAt = 0
+  recapCycleToken = 0
+  recapTriggeredToken = -1
+  recapTriggerSourceIsDemo = false
+  handledStallKeys.clear()
+}
+
+function formatReason(reason: TelemetryStallReason): string {
+  return reason.replace(/_/g, ' ').toUpperCase()
 }

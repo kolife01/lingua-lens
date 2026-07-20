@@ -1,5 +1,11 @@
 type Status = 'connecting' | 'listening' | 'error' | 'setup'
 type CardType = 'HINT' | 'WORD' | 'RECAP' | 'NONE'
+interface TelemetryPanelOptions {
+  onEnabledChange: (enabled: boolean) => void | Promise<void>
+  onEndpointChange: (endpointUrl: string) => void | Promise<void>
+  onExport: () => void
+  onClear: () => void | Promise<void>
+}
 
 let statusEl: HTMLDivElement
 let metaEl: HTMLDivElement
@@ -22,6 +28,10 @@ let nodStateEl: HTMLDivElement
 let nodPitchEl: HTMLDivElement
 let nodCountEl: HTMLDivElement
 let nodHintEl: HTMLDivElement
+let telemetryToggleEl: HTMLInputElement
+let telemetryEndpointEl: HTMLInputElement
+let telemetryStatsEl: HTMLDivElement
+let telemetryHintEl: HTMLDivElement
 
 export function mountUi() {
   const app = document.querySelector<HTMLDivElement>('#app')!
@@ -90,6 +100,28 @@ export function mountUi() {
               <div id="nod-hint" class="nod-hint signal-wide">Add <code>?nod=1</code> to enable. Press <code>N</code> to simulate when enabled.</div>
             </div>
           </article>
+          <article class="panel telemetry-panel">
+            <header class="panel-head">
+              <h2>Telemetry</h2>
+              <div id="telemetry-stats" class="meta">0 events · 0 KB</div>
+            </header>
+            <div class="telemetry-copy">Logs stay on this device unless you set an endpoint.</div>
+            <div class="telemetry-grid">
+              <label class="toggle-row" for="telemetry-enabled">
+                <span>Record telemetry</span>
+                <input id="telemetry-enabled" type="checkbox" checked />
+              </label>
+              <label class="telemetry-field signal-wide" for="telemetry-endpoint">
+                <span>Log endpoint URL</span>
+                <input id="telemetry-endpoint" type="url" inputmode="url" placeholder="" autocomplete="off" />
+              </label>
+              <div id="telemetry-hint" class="nod-hint signal-wide"></div>
+              <div class="telemetry-actions signal-wide">
+                <button id="telemetry-export" type="button" class="secondary-button">Export</button>
+                <button id="telemetry-clear" type="button" class="secondary-button secondary-danger">Clear</button>
+              </div>
+            </div>
+          </article>
         </section>
       </section>
     </main>
@@ -116,6 +148,10 @@ export function mountUi() {
   nodPitchEl = app.querySelector<HTMLDivElement>('#nod-pitch')!
   nodCountEl = app.querySelector<HTMLDivElement>('#nod-count')!
   nodHintEl = app.querySelector<HTMLDivElement>('#nod-hint')!
+  telemetryToggleEl = app.querySelector<HTMLInputElement>('#telemetry-enabled')!
+  telemetryEndpointEl = app.querySelector<HTMLInputElement>('#telemetry-endpoint')!
+  telemetryStatsEl = app.querySelector<HTMLDivElement>('#telemetry-stats')!
+  telemetryHintEl = app.querySelector<HTMLDivElement>('#telemetry-hint')!
   injectStyles()
 }
 
@@ -218,6 +254,56 @@ export function renderSetupScreen(options: { onSubmit: (value: string) => void |
     event.preventDefault()
     void options.onSubmit(input.value)
   })
+}
+
+export function bindTelemetryPanel(options: TelemetryPanelOptions): void {
+  if (!telemetryToggleEl || !telemetryEndpointEl) return
+  telemetryToggleEl.addEventListener('change', () => {
+    void options.onEnabledChange(telemetryToggleEl.checked)
+  })
+  telemetryEndpointEl.addEventListener('change', () => {
+    void options.onEndpointChange(telemetryEndpointEl.value)
+  })
+  telemetryEndpointEl.addEventListener('blur', () => {
+    void options.onEndpointChange(telemetryEndpointEl.value)
+  })
+  document.querySelector<HTMLButtonElement>('#telemetry-export')?.addEventListener('click', () => {
+    options.onExport()
+  })
+  document.querySelector<HTMLButtonElement>('#telemetry-clear')?.addEventListener('click', () => {
+    void options.onClear()
+  })
+}
+
+export function setTelemetryState(options: {
+  enabled: boolean
+  endpointUrl: string
+  eventCount: number
+  approximateBytes: number
+  endpointSuggestion?: string
+}): void {
+  if (!telemetryToggleEl || !telemetryEndpointEl || !telemetryStatsEl || !telemetryHintEl) return
+  telemetryToggleEl.checked = options.enabled
+  if (telemetryEndpointEl.value !== options.endpointUrl) {
+    telemetryEndpointEl.value = options.endpointUrl
+  }
+  telemetryEndpointEl.placeholder = options.endpointSuggestion ?? ''
+  telemetryStatsEl.textContent = `${options.eventCount} events · ${formatKilobytes(options.approximateBytes)}`
+  telemetryHintEl.innerHTML = options.endpointSuggestion
+    ? `Leave blank to keep logs local. Dev suggestion: <code>${escapeHtml(options.endpointSuggestion)}</code>`
+    : 'Leave blank to keep logs local.'
+}
+
+export function downloadJsonFile(filename: string, json: string): void {
+  const blob = new Blob([json], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  window.setTimeout(() => {
+    URL.revokeObjectURL(url)
+  }, 0)
 }
 
 function injectStyles() {
@@ -427,6 +513,8 @@ function injectStyles() {
       color: var(--muted);
     }
     .setup-form input {
+      width: 100%;
+      box-sizing: border-box;
       min-width: 0;
       padding: 12px 14px;
       border-radius: 12px;
@@ -444,12 +532,79 @@ function injectStyles() {
       font: 700 14px/1 'IBM Plex Sans', sans-serif;
       cursor: pointer;
     }
+    .telemetry-panel {
+      min-height: 0;
+    }
+    .telemetry-copy {
+      margin-bottom: 14px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .telemetry-grid {
+      display: grid;
+      gap: 12px;
+    }
+    .toggle-row,
+    .telemetry-field {
+      display: grid;
+      gap: 8px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02)),
+        rgba(255, 255, 255, 0.03);
+    }
+    .toggle-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      font: 600 14px/1.35 'IBM Plex Mono', 'SFMono-Regular', monospace;
+    }
+    .toggle-row input {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--accent);
+    }
+    .telemetry-field span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .telemetry-field input {
+      width: 100%;
+      box-sizing: border-box;
+      min-width: 0;
+      padding: 12px 14px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(8, 10, 10, 0.4);
+      color: var(--text);
+      font: inherit;
+    }
+    .telemetry-actions {
+      display: flex;
+      gap: 10px;
+    }
+    .secondary-button {
+      padding: 12px 16px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+      font: 700 14px/1 'IBM Plex Sans', sans-serif;
+      cursor: pointer;
+    }
+    .secondary-danger {
+      color: #ffb8b1;
+      border-color: rgba(255, 157, 149, 0.45);
+    }
     @media (max-width: 820px) {
       .shell { padding: 18px; }
       .grid { grid-template-columns: 1fr; }
       .signal-grid { grid-template-columns: 1fr; }
       h1 { font-size: 34px; }
       .setup-form { grid-template-columns: 1fr; }
+      .telemetry-actions { flex-direction: column; }
     }
   `
   const style = document.createElement('style')
@@ -459,4 +614,17 @@ function injectStyles() {
 
 function formatUsd(value: number): string {
   return `$${value.toFixed(2)}`
+}
+
+function formatKilobytes(bytes: number): string {
+  return `${(bytes / 1024).toFixed(1)} KB`
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
 }

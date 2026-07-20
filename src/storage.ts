@@ -20,14 +20,20 @@ export interface PersistedCoachCard {
   text: string
   ttl_ms: number
   choices: PersistedHintChoice[]
+  continuation?: boolean
+  attributed_roles?: Array<'learner' | 'partner'>
 }
 
 export interface PersistedTranscriptEntry {
   id: string
-  role: 'speaker' | 'partner'
   text: string
-  timestamp: string
+  startedAt: string
+  endedAt: string
+  gapBeforeMs: number
+  attributedRole?: 'learner' | 'partner'
   createdAt: number
+  timestamp?: string
+  role?: 'speaker' | 'partner'
 }
 
 export interface BackgroundSessionState {

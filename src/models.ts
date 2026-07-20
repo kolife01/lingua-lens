@@ -19,7 +19,11 @@ export const PRICING: Record<string, ModelPricing> = {
     outputUsdPerMillionTokens: 30,
   },
   'gpt-4o-mini-transcribe': {
-    // TODO: verify at platform pricing page
+    // Official model pricing confirms $1.25 / 1M input audio tokens:
+    // https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe
+    // This app budgets uploaded audio by second because the transcription endpoint
+    // does not expose audio-token usage in this path; keep the existing per-second
+    // estimate as a conservative fallback until token-accurate metering is wired.
     transcriptionUsdPerSecond: 0.00006,
   },
 }

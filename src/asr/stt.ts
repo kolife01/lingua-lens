@@ -3,6 +3,7 @@ import type { TranscriptionUsageReport } from '../budget'
 
 export interface BatchTranscriberOptions {
   apiKey: string
+  getPromptContext?: () => string
   onTranscript: (result: {
     text: string
     model: string
@@ -10,6 +11,7 @@ export interface BatchTranscriberOptions {
     rms: number
     bufferedMs: number
     latencyMs: number
+    promptContext: string
   }) => void | Promise<void>
   onUsage?: (report: TranscriptionUsageReport) => void | Promise<void>
   isRequestAllowed?: () => boolean | Promise<boolean>
@@ -84,7 +86,8 @@ export function createBatchTranscriber(options: BatchTranscriberOptions): BatchT
         }
         const audioSeconds = pcm.byteLength / (CHANNEL_COUNT * (BITS_PER_SAMPLE / 8) * SAMPLE_RATE)
         const startedAt = performance.now()
-        const text = await transcribeWav(options.apiKey, wav)
+        const promptContext = options.getPromptContext?.().slice(0, 200) ?? ''
+        const text = await transcribeWav(options.apiKey, wav, promptContext)
         const latencyMs = Math.round(performance.now() - startedAt)
         await options.onUsage?.({
           model: ASR_MODEL,
@@ -100,6 +103,7 @@ export function createBatchTranscriber(options: BatchTranscriberOptions): BatchT
           rms,
           bufferedMs,
           latencyMs,
+          promptContext,
         })
       } catch (err) {
         options.onError?.(err)
@@ -114,12 +118,15 @@ export function createBatchTranscriber(options: BatchTranscriberOptions): BatchT
   }
 }
 
-async function transcribeWav(apiKey: string, wavBytes: Uint8Array): Promise<string> {
+async function transcribeWav(apiKey: string, wavBytes: Uint8Array, promptContext: string): Promise<string> {
   const form = new FormData()
   form.append('model', ASR_MODEL)
   const wavBuffer = new ArrayBuffer(wavBytes.byteLength)
   new Uint8Array(wavBuffer).set(wavBytes)
   form.append('file', new Blob([wavBuffer], { type: 'audio/wav' }), 'speech.wav')
+  if (promptContext) {
+    form.append('prompt', promptContext)
+  }
 
   const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
