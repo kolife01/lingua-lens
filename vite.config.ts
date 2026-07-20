@@ -1,7 +1,7 @@
 import { mkdir, appendFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, loadEnv, type Plugin } from 'vite'
 
 function createSessionLogPlugin(): Plugin {
   const startedAt = new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-')
@@ -48,6 +48,31 @@ function createSessionLogPlugin(): Plugin {
   }
 }
 
+function createDevelopmentApiKeyPlugin(apiKey: string): Plugin {
+  return {
+    name: 'lingualens-development-api-key',
+    apply: 'serve',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.url !== '/__devkey') {
+          next()
+          return
+        }
+
+        if (req.method !== 'GET') {
+          res.statusCode = 405
+          res.end('Method Not Allowed')
+          return
+        }
+
+        res.setHeader('Cache-Control', 'no-store')
+        res.setHeader('Content-Type', 'application/json; charset=utf-8')
+        res.end(JSON.stringify({ apiKey }))
+      })
+    },
+  }
+}
+
 function setCorsHeaders(res: ServerResponse): void {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
@@ -65,8 +90,15 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return raw ? JSON.parse(raw) : {}
 }
 
-export default defineConfig(({ command }) => ({
-  server: { host: true, port: 5173 },
-  build: { target: 'esnext' },
-  plugins: command === 'serve' ? [createSessionLogPlugin()] : [],
-}))
+export default defineConfig(({ command, mode }) => {
+  const env = loadEnv(mode, process.cwd(), '')
+  const plugins = command === 'serve'
+    ? [createSessionLogPlugin(), createDevelopmentApiKeyPlugin(env.OPENAI_API_KEY?.trim() ?? '')]
+    : []
+
+  return {
+    server: { host: true, port: 5173 },
+    build: { target: 'esnext' },
+    plugins,
+  }
+})

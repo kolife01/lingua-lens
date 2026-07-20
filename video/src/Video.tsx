@@ -1,813 +1,99 @@
 import React from 'react';
 import {Audio} from '@remotion/media';
-import {
-  AbsoluteFill,
-  Img,
-  Sequence,
-  interpolate,
-  spring,
-  staticFile,
-  useCurrentFrame,
-  useVideoConfig,
-} from 'remotion';
-import {AUDIO_FILES, DIALOGUE_LINES, NARRATION_SECTIONS, SCENES, fps, totalSeconds} from './script';
+import {AbsoluteFill, Img, Sequence, interpolate, spring, staticFile, useCurrentFrame} from 'remotion';
+import {AUDIO_FILES, DIALOGUE_LINES, SCENES, fps, totalSeconds} from './script';
 
-type CaptionCue = {
-  startFrame: number;
-  endFrame: number;
-  text: string;
+const p = {
+  ink: '#030706', panel: 'rgba(10,17,14,0.88)', line: 'rgba(218,238,224,0.12)',
+  text: '#f1f7f2', muted: '#8e9e93', lime: '#99ff64', mint: '#c7ffdb',
+  human: '#8db9ff', amber: '#ffd56a', red: '#ff9d8a',
 };
 
-type SceneWindow = (typeof SCENES)[number];
+const hud = [1, 2, 3, 4, 5, 6].map((n) => staticFile(`hud/hud-${n}.png`));
+const mono = 'Menlo, Monaco, monospace';
+const sans = 'Avenir Next, Helvetica, Arial, sans-serif';
+const panel: React.CSSProperties = {background: p.panel, border: `1px solid ${p.line}`, borderRadius: 28, boxShadow: '0 26px 70px rgba(0,0,0,.28)'};
+const label: React.CSSProperties = {fontFamily: mono, color: p.lime, fontSize: 16, letterSpacing: '.16em', textTransform: 'uppercase'};
 
-const palette = {
-  bg: '#020303',
-  panel: 'rgba(10, 14, 12, 0.84)',
-  panelBorder: 'rgba(174, 255, 196, 0.18)',
-  text: '#f4f7f1',
-  muted: '#99aa9f',
-  accent: '#92ff5b',
-  accentSoft: '#b8ffcb',
-  warning: '#ffe58d',
-};
-
-const hudFrames = [
-  staticFile('hud/hud-1.png'),
-  staticFile('hud/hud-2.png'),
-  staticFile('hud/hud-3.png'),
-  staticFile('hud/hud-4.png'),
-  staticFile('hud/hud-5.png'),
-  staticFile('hud/hud-6.png'),
-];
-
-const captions = buildCaptions();
-
-function buildCaptions(): CaptionCue[] {
-  return NARRATION_SECTIONS.flatMap((section) => {
-    const scene = SCENES.find((item) => item.id === section.sceneId)!;
-    const sectionStart = scene.start * fps;
-    const sectionFrames = scene.duration * fps;
-    const weights = section.sentences.map((sentence) => Math.max(3, sentence.trim().split(/\s+/).length));
-    const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
-    let cursor = sectionStart;
-    return section.sentences.map((sentence, index) => {
-      const remainingFrames = sectionStart + sectionFrames - cursor;
-      const frames =
-        index === section.sentences.length - 1
-          ? remainingFrames
-          : Math.max(30, Math.round((sectionFrames * weights[index]!) / totalWeight));
-      const cue = {
-        startFrame: cursor,
-        endFrame: Math.min(sectionStart + sectionFrames, cursor + frames),
-        text: sentence,
-      };
-      cursor = cue.endFrame;
-      return cue;
-    });
-  });
-}
-
-const useSceneFrame = (scene: SceneWindow) => {
-  const frame = useCurrentFrame();
-  return Math.max(0, frame - scene.start * fps);
-};
-
-const shell: React.CSSProperties = {
-  background: palette.panel,
-  border: `1px solid ${palette.panelBorder}`,
-  borderRadius: 30,
-  boxShadow: '0 30px 80px rgba(0, 0, 0, 0.34)',
-  backdropFilter: 'blur(18px)',
-};
-
-const sceneLabel: React.CSSProperties = {
-  fontFamily: 'Menlo, Monaco, monospace',
-  fontSize: 18,
-  letterSpacing: '0.16em',
-  textTransform: 'uppercase',
-  color: palette.accent,
-};
-
-const titleStyle: React.CSSProperties = {
-  fontFamily: 'Avenir Next, Helvetica, Arial, sans-serif',
-  color: palette.text,
-  fontWeight: 700,
-  letterSpacing: '-0.03em',
-};
-
-const bodyStyle: React.CSSProperties = {
-  fontFamily: 'Avenir Next, Helvetica, Arial, sans-serif',
-  color: palette.muted,
-  fontSize: 30,
-  lineHeight: 1.45,
-  margin: 0,
-};
+const localFrame = (start: number) => Math.max(0, useCurrentFrame() - start * fps);
 
 const Background: React.FC = () => {
   const frame = useCurrentFrame();
-  const drift = interpolate(frame, [0, totalSeconds * fps], [0, 1]);
-  return (
-    <AbsoluteFill
-      style={{
-        background:
-          `radial-gradient(circle at ${20 + drift * 12}% ${16 + drift * 8}%, rgba(146,255,91,0.10), transparent 24%),` +
-          `radial-gradient(circle at ${78 - drift * 10}% ${72 - drift * 12}%, rgba(184,255,203,0.10), transparent 24%),` +
-          'linear-gradient(180deg, #020303 0%, #040705 55%, #010201 100%)',
-      }}
-    />
-  );
+  const d = interpolate(frame, [0, totalSeconds * fps], [0, 1]);
+  return <AbsoluteFill style={{background: `radial-gradient(ellipse at ${20 + d * 14}% ${16 + d * 8}%, rgba(153,255,100,.11), transparent 28%), radial-gradient(ellipse at ${80 - d * 10}% 80%, rgba(141,185,255,.08), transparent 30%), linear-gradient(150deg, #030706, #07100b 58%, #020403)`}} />;
 };
 
-const Grain: React.FC = () => {
+const Waveform: React.FC<{active: boolean; color: string; intensity?: number; flat?: boolean}> = ({active, color, intensity = 1, flat = false}) => {
   const frame = useCurrentFrame();
-  return (
-    <AbsoluteFill
-      style={{
-        opacity: 0.08,
-        backgroundImage:
-          `radial-gradient(circle at ${frame % 120}% 20%, rgba(255,255,255,0.16) 0 1px, transparent 1px),` +
-          `radial-gradient(circle at ${(frame * 2) % 100}% 80%, rgba(255,255,255,0.10) 0 1px, transparent 1px)`,
-        backgroundSize: '18px 18px, 24px 24px',
-        mixBlendMode: 'screen',
-      }}
-    />
-  );
+  return <div style={{height: 54, display: 'flex', alignItems: 'center', gap: 4}}>{Array.from({length: 34}, (_, i) => {
+    const wave = Math.abs(Math.sin(frame / 4.8 + i * .67) + Math.sin(frame / 10 + i * .28)) / 2;
+    const h = flat ? 4 : active ? 7 + wave * 38 * intensity : 4 + ((i * 7) % 3);
+    return <div key={i} style={{width: 5, height: h, borderRadius: 10, background: active ? color : 'rgba(255,255,255,.12)', boxShadow: active ? `0 0 12px ${color}55` : 'none'}} />;
+  })}</div>;
 };
 
-const ColdOpenScene: React.FC = () => {
-  const scene = SCENES[0]!;
-  const local = useSceneFrame(scene);
-  const freezeFrame = 9 * fps;
-  const frozen = local >= freezeFrame;
-  const activeFrame = frozen ? freezeFrame : local;
-  const bars = new Array(42).fill(true).map((_, index) => {
-    const raw = Math.sin(activeFrame / 5 + index * 0.55) + Math.sin(activeFrame / 11 + index * 0.28);
-    const height = 18 + Math.abs(raw) * 52;
-    return height;
-  });
-  const pulse = frozen ? 1 : 1 + Math.sin(local / 8) * 0.08;
-  const lineProgress = interpolate(local, [0, 3 * fps, 7 * fps, freezeFrame], [0, 1, 1, 1], {extrapolateRight: 'clamp'});
-  const secondLineProgress = interpolate(local, [2.2 * fps, 5 * fps, 8 * fps, freezeFrame], [0, 0.2, 1, 1], {
-    extrapolateRight: 'clamp',
-  });
-  return (
-    <AbsoluteFill style={{padding: '92px 110px 180px'}}>
-      <div style={{...sceneLabel, color: 'rgba(255,255,255,0.48)'}}>Cold open</div>
-      <div style={{flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
-        <div style={{width: '100%', maxWidth: 1440}}>
-          <div
-            style={{
-              ...shell,
-              minHeight: 480,
-              borderRadius: 36,
-              background: frozen ? 'rgba(7, 7, 7, 0.94)' : 'rgba(4, 5, 5, 0.92)',
-              padding: '56px 64px',
-            }}
-          >
-            <div style={{display: 'flex', justifyContent: 'space-between', color: 'rgba(255,255,255,0.44)', fontFamily: 'Menlo, Monaco, monospace'}}>
-              <span>GPT-Live practice</span>
-              <span>{frozen ? 'freeze detected' : 'listening'}</span>
-            </div>
-            <div style={{height: 220, display: 'flex', alignItems: 'center', gap: 10, marginTop: 34, transform: `scale(${pulse})`}}>
-              {bars.map((height, index) => (
-                <div
-                  key={index}
-                  style={{
-                    width: 16,
-                    height,
-                    borderRadius: 999,
-                    background: frozen ? 'rgba(255,255,255,0.18)' : 'linear-gradient(180deg, #92ff5b, #d4ffd7)',
-                    boxShadow: frozen ? 'none' : '0 0 22px rgba(146,255,91,0.22)',
-                  }}
-                />
-              ))}
-            </div>
-            <div style={{display: 'grid', gap: 16, marginTop: 42}}>
-              <DialogueCard
-                speaker="GPT-Live"
-                text={DIALOGUE_LINES[0]!.text}
-                progress={lineProgress}
-                emphasized={false}
-              />
-              <DialogueCard
-                speaker="Me"
-                text={DIALOGUE_LINES[1]!.text}
-                progress={secondLineProgress}
-                emphasized
-                frozen={frozen}
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-    </AbsoluteFill>
-  );
-};
+type Turn = {speaker: 'GPT-Live' | 'Me'; text: string; at: number; until: number; stalled?: boolean};
+const turns: Turn[] = [
+  {speaker: 'GPT-Live', text: DIALOGUE_LINES[0].text, at: 1.2, until: 4.2},
+  {speaker: 'Me', text: DIALOGUE_LINES[1].text, at: 4.4, until: 9.2, stalled: true},
+  {speaker: 'Me', text: 'Friday is too tight. We need more time before the review.', at: 14.2, until: 18.0},
+  {speaker: 'GPT-Live', text: DIALOGUE_LINES[2].text, at: 20.0, until: 23.8},
+  {speaker: 'GPT-Live', text: DIALOGUE_LINES[4].text, at: 26.0, until: 29.5},
+  {speaker: 'Me', text: DIALOGUE_LINES[5].text, at: 34.0, until: 38.4},
+];
 
-const DialogueCard: React.FC<{
-  speaker: string;
-  text: string;
-  progress: number;
-  emphasized?: boolean;
-  frozen?: boolean;
-}> = ({speaker, text, progress, emphasized = false, frozen = false}) => {
-  const visibleCount = Math.max(0, Math.round(text.length * progress));
-  return (
-    <div
-      style={{
-        padding: '20px 24px',
-        borderRadius: 22,
-        border: `1px solid ${emphasized ? 'rgba(146,255,91,0.34)' : 'rgba(255,255,255,0.10)'}`,
-        background: emphasized ? 'rgba(146,255,91,0.07)' : 'rgba(255,255,255,0.03)',
-      }}
-    >
-      <div style={{fontFamily: 'Menlo, Monaco, monospace', fontSize: 17, color: emphasized ? palette.accent : 'rgba(255,255,255,0.50)'}}>
-        {speaker}
-      </div>
-      <div
-        style={{
-          marginTop: 8,
-          color: palette.text,
-          fontFamily: 'Avenir Next, Helvetica, Arial, sans-serif',
-          fontSize: 42,
-          lineHeight: 1.16,
-          opacity: progress > 0 ? 1 : 0.18,
-        }}
-      >
-        {text.slice(0, visibleCount)}
-        {visibleCount < text.length ? <span style={{opacity: 0.46}}>{text.slice(visibleCount)}</span> : null}
-        {frozen ? <span style={{color: palette.warning}}> |</span> : null}
-      </div>
-    </div>
-  );
-};
-
-const ProblemScene: React.FC = () => {
-  const scene = SCENES[1]!;
-  const local = useSceneFrame(scene);
-  const focus = Math.floor(interpolate(local, [0, scene.duration * fps - 1], [0, 2], {extrapolateRight: 'clamp'}));
-  const points = [
-    'The phrase is almost there.',
-    'Looking down kills the exchange.',
-    'Moving on erases the lesson.',
-  ];
-  return (
-    <AbsoluteFill style={{padding: '90px 110px 180px'}}>
-      <div style={sceneLabel}>The problem</div>
-      <div style={{display: 'grid', gridTemplateColumns: '1.15fr 0.85fr', gap: 34, marginTop: 34, flex: 1}}>
-        <div style={{...shell, padding: 42}}>
-          <div style={{...titleStyle, fontSize: 86, lineHeight: 0.95, maxWidth: 760}}>The best learning moment disappears in real time.</div>
-          <p style={{...bodyStyle, marginTop: 28, maxWidth: 720}}>
-            Spoken practice works because it creates pressure. The failure point is retrieval under that pressure, exactly when the other side is still waiting.
-          </p>
-          <div style={{display: 'grid', gap: 18, marginTop: 40}}>
-            {points.map((point, index) => (
-              <div
-                key={point}
-                style={{
-                  padding: '18px 22px',
-                  borderRadius: 20,
-                  border: `1px solid ${focus >= index ? 'rgba(146,255,91,0.32)' : 'rgba(255,255,255,0.08)'}`,
-                  background: focus >= index ? 'rgba(146,255,91,0.07)' : 'rgba(255,255,255,0.02)',
-                  color: palette.text,
-                  fontSize: 30,
-                }}
-              >
-                {point}
-              </div>
-            ))}
-          </div>
-        </div>
-        <div style={{display: 'grid', gap: 24}}>
-          <PanelTitle title="What breaks" body="A phone steals your eyes, your timing, and the exact phrase that should have become tomorrow's review card." />
-          <div style={{...shell, padding: 30}}>
-            <div style={{fontFamily: 'Menlo, Monaco, monospace', fontSize: 17, color: palette.muted}}>timeline</div>
-            <div style={{display: 'grid', gap: 16, marginTop: 20}}>
-              {[
-                'Idea is clear',
-                'English stalls',
-                'Phone lookup',
-                'Turn collapses',
-              ].map((step, index) => (
-                <div key={step} style={{display: 'grid', gridTemplateColumns: '72px 1fr', gap: 16, alignItems: 'center'}}>
-                  <div style={{fontFamily: 'Menlo, Monaco, monospace', color: index < 2 ? palette.accentSoft : '#ffb39f'}}>{`0${index + 1}`}</div>
-                  <div
-                    style={{
-                      padding: '16px 18px',
-                      borderRadius: 18,
-                      border: '1px solid rgba(255,255,255,0.08)',
-                      background: 'rgba(255,255,255,0.02)',
-                      color: palette.text,
-                      fontSize: 24,
-                    }}
-                  >
-                    {step}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-    </AbsoluteFill>
-  );
-};
-
-const RevealScene: React.FC = () => {
-  const scene = SCENES[2]!;
-  const local = useSceneFrame(scene);
-  const push = spring({fps, frame: local, config: {damping: 16, stiffness: 100}});
-  const hudGlow = spring({fps, frame: local - 40, config: {damping: 14, stiffness: 120}});
-  return (
-    <AbsoluteFill style={{padding: '86px 110px 180px'}}>
-      <div style={sceneLabel}>Reveal</div>
-      <div style={{display: 'grid', gridTemplateColumns: '1fr 0.92fr', gap: 36, marginTop: 28, flex: 1, alignItems: 'center'}}>
-        <div style={{...shell, padding: 34, minHeight: 600, display: 'grid', placeItems: 'center'}}>
-          <div style={{position: 'relative', width: 760, height: 420, transform: `translateY(${18 - push * 18}px) scale(${0.94 + push * 0.06})`}}>
-            <div style={{position: 'absolute', inset: 0, borderRadius: 240, border: '16px solid rgba(220,231,225,0.72)'}} />
-            <div
-              style={{
-                position: 'absolute',
-                left: 170,
-                top: 84,
-                width: 420,
-                height: 230,
-                borderRadius: 28,
-                background: '#020503',
-                border: '1px solid rgba(146,255,91,0.38)',
-                boxShadow: `0 0 ${70 * hudGlow}px rgba(146,255,91,0.18)`,
-                overflow: 'hidden',
-              }}
-            >
-              <Img src={hudFrames[0]} style={{width: '100%', height: '100%', objectFit: 'cover', opacity: 0.88}} />
-              <div
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  background: `radial-gradient(circle at 72% 40%, rgba(146,255,91,${0.10 + hudGlow * 0.22}), transparent 26%)`,
-                }}
-              />
-            </div>
-            <div style={{position: 'absolute', left: -40, top: 156, width: 150, height: 26, borderRadius: 26, background: 'rgba(220,231,225,0.78)'}} />
-            <div style={{position: 'absolute', right: -40, top: 156, width: 150, height: 26, borderRadius: 26, background: 'rgba(220,231,225,0.78)'}} />
-          </div>
-        </div>
-        <div>
-          <div style={{...titleStyle, fontSize: 88, lineHeight: 0.92}}>LinguaLens</div>
-          <div style={{...titleStyle, fontSize: 34, color: '#dbefe1', marginTop: 14}}>a coach that stays inside the conversation</div>
-          <p style={{...bodyStyle, marginTop: 28, maxWidth: 560}}>
-            Even G2 gives the right surface: silent, glanceable, and always in view when the sentence stalls.
-          </p>
-          <div style={{display: 'grid', gap: 16, marginTop: 28}}>
-            {['Silent HUD', 'Own-language gloss', 'Only when needed'].map((item) => (
-              <div key={item} style={{...shell, padding: '18px 22px', color: palette.text, fontSize: 28}}>
-                {item}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </AbsoluteFill>
-  );
-};
-
-const CoreDemoScene: React.FC = () => {
-  const scene = SCENES[3]!;
-  const local = useSceneFrame(scene);
-  const stage = local < 22 * fps ? 'hint' : local < 34 * fps ? 'word' : local < 46 * fps ? 'recap' : 'quiet';
-  const hudSrc =
-    stage === 'hint'
-      ? local < 12 * fps
-        ? hudFrames[0]
-        : hudFrames[1]
-      : stage === 'word'
-        ? local < 28 * fps
-          ? hudFrames[2]
-          : hudFrames[3]
-        : stage === 'recap'
-          ? hudFrames[4]
-          : hudFrames[5];
-  const activeTurn = stage === 'hint' ? 1 : stage === 'word' ? 2 : stage === 'recap' ? 5 : 5;
-  return (
-    <AbsoluteFill style={{padding: '84px 104px 180px'}}>
-      <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-        <div style={sceneLabel}>Core demo</div>
-        <div style={{fontFamily: 'Menlo, Monaco, monospace', color: palette.muted, fontSize: 17}}>same conversation, replayed with a coach</div>
-      </div>
-      <div style={{display: 'grid', gridTemplateColumns: '1.02fr 0.98fr', gap: 28, marginTop: 26, flex: 1}}>
-        <HudPlayback stage={stage} hudSrc={hudSrc} />
-        <ConversationPanel activeTurn={activeTurn} />
-      </div>
-    </AbsoluteFill>
-  );
-};
-
-const HudPlayback: React.FC<{stage: 'hint' | 'word' | 'recap' | 'quiet'; hudSrc: string}> = ({stage, hudSrc}) => {
-  return (
-    <div style={{...shell, padding: 28, overflow: 'hidden'}}>
-      <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-        <div style={{fontFamily: 'Menlo, Monaco, monospace', color: palette.muted, fontSize: 17}}>left: real HUD capture</div>
-        <StageChip stage={stage} />
-      </div>
-      <div
-        style={{
-          marginTop: 22,
-          height: 720,
-          borderRadius: 34,
-          border: '1px solid rgba(255,255,255,0.08)',
-          background: 'linear-gradient(180deg, #06100a, #020503)',
-          display: 'grid',
-          placeItems: 'center',
-          overflow: 'hidden',
-          position: 'relative',
-        }}
-      >
-        <div style={{position: 'absolute', inset: 32, borderRadius: 240, border: '11px solid rgba(217,225,220,0.62)'}} />
-        <div
-          style={{
-            width: 760,
-            height: 380,
-            borderRadius: 28,
-            overflow: 'hidden',
-            background: '#00ff00',
-            boxShadow: '0 0 0 10px rgba(255,255,255,0.04), 0 0 80px rgba(146,255,91,0.18)',
-          }}
-        >
-          <Img src={hudSrc} style={{width: '100%', height: '100%', objectFit: 'cover'}} />
-        </div>
-        <div
-          style={{
-            position: 'absolute',
-            left: 28,
-            right: 28,
-            bottom: 24,
-            display: 'flex',
-            justifyContent: 'space-between',
-            color: 'rgba(232,240,235,0.42)',
-            fontFamily: 'Menlo, Monaco, monospace',
-            fontSize: 16,
-          }}
-        >
-          <span>576 x 288 capture</span>
-          <span>{stage === 'quiet' ? 'blank HUD hold: 2s' : 'coach speaks in text'}</span>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const StageChip: React.FC<{stage: 'hint' | 'word' | 'recap' | 'quiet'}> = ({stage}) => (
-  <div
-    style={{
-      borderRadius: 999,
-      border: `1px solid ${stage === 'word' ? 'rgba(255,229,141,0.35)' : 'rgba(146,255,91,0.35)'}`,
-      color: stage === 'word' ? palette.warning : palette.accent,
-      padding: '10px 16px',
-      fontFamily: 'Menlo, Monaco, monospace',
-      fontSize: 17,
-      letterSpacing: '0.08em',
-      textTransform: 'uppercase',
-    }}
-  >
-    {stage}
-  </div>
-);
-
-const ConversationPanel: React.FC<{activeTurn: number}> = ({activeTurn}) => {
-  return (
-    <div style={{...shell, padding: 30}}>
-      <div style={{fontFamily: 'Menlo, Monaco, monospace', color: palette.muted, fontSize: 17}}>right: conversation subtitles</div>
-      <div style={{display: 'grid', gap: 16, marginTop: 22}}>
-        {DIALOGUE_LINES.map((line, index) => (
-          <div
-            key={`${line.speaker}-${index}`}
-            style={{
-              padding: '18px 20px',
-              borderRadius: 20,
-              border: `1px solid ${index === activeTurn ? 'rgba(146,255,91,0.34)' : 'rgba(255,255,255,0.08)'}`,
-              background: index === activeTurn ? 'rgba(146,255,91,0.07)' : 'rgba(255,255,255,0.02)',
-            }}
-          >
-            <div style={{fontFamily: 'Menlo, Monaco, monospace', fontSize: 16, color: index === activeTurn ? palette.accent : palette.muted}}>
-              {line.speaker}
-            </div>
-            <div style={{marginTop: 8, color: palette.text, fontSize: 30, lineHeight: 1.25}}>{line.text}</div>
-          </div>
-        ))}
-      </div>
-      <div style={{display: 'grid', gap: 16, marginTop: 24}}>
-        <PanelTitle
-          title="HINT"
-          body="One to three complete lines appear exactly when the sentence stalls."
-          compact
-        />
-        <PanelTitle
-          title="WORD"
-          body="A three-word gloss is enough when GPT-Live says a new term."
-          compact
-        />
-        <PanelTitle
-          title="RECAP"
-          body="The missed phrase returns after the pressure passes."
-          compact
-        />
-      </div>
-    </div>
-  );
-};
-
-const BuildScene: React.FC = () => {
-  return (
-    <AbsoluteFill style={{padding: '84px 104px 180px'}}>
-      <div style={sceneLabel}>Why glasses / how it&apos;s built</div>
-      <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 24, marginTop: 28, flex: 1}}>
-        <BuildCard
-          title="Why this interface"
-          lines={[
-            'A phone kills the conversation.',
-            'Audio would talk over it.',
-            'A silent HUD fits inside the turn.',
-            'Silence is part of the product.',
-          ]}
-        />
-        <BuildCard
-          title="Codex + models"
-          lines={[
-            'Codex wrote the app end to end.',
-            'GPT-5.6 writes RECAP.',
-            'luna makes the real-time help-or-stay-quiet call.',
-            'The session logs live in the repo.',
-          ]}
-        />
-        <BuildCard
-          title="BLE honesty"
-          lines={[
-            'Text first.',
-            'One image.',
-            'Tiny payloads.',
-            'Nothing wasted.',
-          ]}
-        />
-      </div>
-      <div style={{display: 'grid', gridTemplateColumns: '1.06fr 0.94fr', gap: 28, marginTop: 26}}>
-        <ArchitectureRail />
-        <RepoCallout />
-      </div>
-    </AbsoluteFill>
-  );
-};
-
-const BuildCard: React.FC<{title: string; lines: string[]}> = ({title, lines}) => (
-  <div style={{...shell, padding: 28}}>
-    <div style={{...titleStyle, fontSize: 40, lineHeight: 1.02}}>{title}</div>
-    <div style={{display: 'grid', gap: 14, marginTop: 22}}>
-      {lines.map((line) => (
-        <div
-          key={line}
-          style={{
-            padding: '16px 18px',
-            borderRadius: 18,
-            background: 'rgba(255,255,255,0.03)',
-            border: '1px solid rgba(255,255,255,0.08)',
-            color: palette.text,
-            fontSize: 24,
-            lineHeight: 1.28,
-          }}
-        >
-          {line}
-        </div>
-      ))}
-    </div>
-  </div>
-);
-
-const ArchitectureRail: React.FC = () => (
-  <div style={{...shell, padding: 28}}>
-    <div style={{fontFamily: 'Menlo, Monaco, monospace', color: palette.muted, fontSize: 17}}>runtime path</div>
-    <div style={{display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 12, marginTop: 18}}>
-      {['Mic', 'ASR', 'Window', 'Judge', 'Hint/Word', 'Recap', 'HUD'].map((step) => (
-        <div
-          key={step}
-          style={{
-            padding: '16px 10px',
-            borderRadius: 16,
-            border: '1px solid rgba(146,255,91,0.22)',
-            background: 'rgba(146,255,91,0.05)',
-            color: '#e5fbe9',
-            textAlign: 'center',
-            fontFamily: 'Menlo, Monaco, monospace',
-            fontSize: 18,
-          }}
-        >
-          {step}
-        </div>
-      ))}
-    </div>
-  </div>
-);
-
-const RepoCallout: React.FC = () => (
-  <div style={{...shell, padding: 28}}>
-    <div style={{fontFamily: 'Menlo, Monaco, monospace', color: palette.accent, fontSize: 17}}>repo evidence</div>
-    <div style={{display: 'grid', gap: 14, marginTop: 18}}>
-      {[
-        'docs/spec.md',
-        'session-logs/codex-*.md',
-        'apps/lingua-lens',
-        'video/NARRATION-v1.md',
-      ].map((file) => (
-        <div
-          key={file}
-          style={{
-            padding: '14px 16px',
-            borderRadius: 16,
-            border: '1px solid rgba(255,255,255,0.08)',
-            background: 'rgba(255,255,255,0.02)',
-            color: palette.text,
-            fontFamily: 'Menlo, Monaco, monospace',
-            fontSize: 21,
-          }}
-        >
-          {file}
-        </div>
-      ))}
-    </div>
-  </div>
-);
-
-const CloseScene: React.FC = () => {
-  const scene = SCENES[5]!;
-  const local = useSceneFrame(scene);
-  const showCard = local > 17 * fps;
-  return (
-    <AbsoluteFill style={{padding: '84px 104px 180px'}}>
-      <div style={sceneLabel}>Close</div>
-      {!showCard ? (
-        <div style={{display: 'grid', gridTemplateColumns: '1.02fr 0.98fr', gap: 28, marginTop: 28, flex: 1}}>
-          <RepoPreview />
-          <SimulatorPreview />
-        </div>
-      ) : (
-        <EndCard />
-      )}
-    </AbsoluteFill>
-  );
-};
-
-const RepoPreview: React.FC = () => (
-  <div style={{...shell, padding: 28}}>
-    <div style={{fontFamily: 'Menlo, Monaco, monospace', color: palette.muted, fontSize: 17}}>repository</div>
-    <div style={{marginTop: 18, borderRadius: 22, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.08)'}}>
-      <div style={{height: 54, background: 'rgba(255,255,255,0.04)', display: 'flex', alignItems: 'center', padding: '0 18px', color: palette.muted}}>
-        github.com/kolife01/lingua-lens
-      </div>
-      <div style={{padding: 24, background: '#09100d', display: 'grid', gap: 14}}>
-        {['README.md', 'apps/lingua-lens', 'video/', 'session-logs/', 'simulator/'].map((row) => (
-          <div key={row} style={{display: 'grid', gridTemplateColumns: '180px 1fr', gap: 14, color: palette.text, fontSize: 24}}>
-            <div style={{fontFamily: 'Menlo, Monaco, monospace', color: palette.accentSoft}}>{row}</div>
-            <div>Ready to run, inspect, and replace the narration files later.</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  </div>
-);
-
-const SimulatorPreview: React.FC = () => (
-  <div style={{...shell, padding: 28}}>
-    <div style={{fontFamily: 'Menlo, Monaco, monospace', color: palette.muted, fontSize: 17}}>official simulator</div>
-    <div style={{marginTop: 18, borderRadius: 22, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.08)'}}>
-      <div style={{height: 54, background: 'rgba(255,255,255,0.04)', display: 'flex', alignItems: 'center', padding: '0 18px', color: palette.muted}}>
-        localhost:5173/simulator
-      </div>
-      <div style={{padding: 24, background: '#0b1310'}}>
-        <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18}}>
-          <div>
-            <div style={{...titleStyle, fontSize: 42}}>Demo conversation</div>
-            <div style={{marginTop: 14, color: palette.muted, fontSize: 24}}>Scripted GPT-Live loop, no glasses, no API key.</div>
-          </div>
-          <div style={{borderRadius: 18, overflow: 'hidden', background: '#00ff00'}}>
-            <Img src={hudFrames[4]} style={{width: '100%', height: 200, objectFit: 'cover'}} />
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-);
-
-const EndCard: React.FC = () => (
-  <div style={{...shell, padding: 48, marginTop: 40, display: 'grid', placeItems: 'center', flex: 1}}>
-    <div style={{textAlign: 'center'}}>
-      <div style={{...titleStyle, fontSize: 108, lineHeight: 0.9}}>LinguaLens</div>
-      <div style={{...titleStyle, fontSize: 34, color: '#dcefe1', marginTop: 16}}>
-        Full phrases when you&apos;re stuck. Silence when you&apos;re not.
-      </div>
-      <div style={{fontFamily: 'Menlo, Monaco, monospace', color: palette.accent, fontSize: 24, marginTop: 26}}>
-        github.com/kolife01/lingua-lens
-      </div>
-      <div style={{color: palette.muted, fontSize: 24, marginTop: 14}}>Built with Codex and GPT-5.6</div>
-    </div>
-  </div>
-);
-
-const PanelTitle: React.FC<{title: string; body: string; compact?: boolean}> = ({title, body, compact = false}) => (
-  <div style={{...shell, padding: compact ? '18px 20px' : 28}}>
-    <div style={{...titleStyle, fontSize: compact ? 30 : 36}}>{title}</div>
-    <p style={{...bodyStyle, fontSize: compact ? 22 : 26, marginTop: 10}}>{body}</p>
-  </div>
-);
-
-const SubtitleLayer: React.FC = () => {
+const LiveConversation: React.FC<{seconds: number; compact?: boolean; ghost?: boolean}> = ({seconds, compact = false, ghost = false}) => {
   const frame = useCurrentFrame();
-  const cue = captions.find((item) => frame >= item.startFrame && frame < item.endFrame) ?? captions[captions.length - 1]!;
-  return (
-    <div
-      style={{
-        position: 'absolute',
-        left: 88,
-        right: 88,
-        bottom: 34,
-        display: 'flex',
-        justifyContent: 'center',
-        pointerEvents: 'none',
-      }}
-    >
-      <div
-        style={{
-          maxWidth: 1560,
-          padding: '18px 28px',
-          borderRadius: 24,
-          background: 'rgba(2, 5, 4, 0.90)',
-          border: '1px solid rgba(255,255,255,0.09)',
-          boxShadow: '0 16px 46px rgba(0,0,0,0.36)',
-          textAlign: 'center',
-          color: '#f7faf6',
-          fontSize: 34,
-          lineHeight: 1.28,
-          fontFamily: 'Avenir Next, Helvetica, Arial, sans-serif',
-        }}
-      >
-        {cue.text}
-      </div>
+  const scale = compact ? .72 : 1;
+  return <div style={{...panel, padding: compact ? 22 : 30, opacity: ghost ? .34 : 1, transform: `scale(${scale})`, transformOrigin: 'top left', width: compact ? '138%' : undefined}}>
+    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+      <div style={label}>Voice practice · live</div><div style={{fontFamily: mono, fontSize: 14, color: seconds > 9 && seconds < 12 ? p.amber : p.muted}}>{seconds > 9 && seconds < 12 ? 'thinking… 01.6s' : 'connected'}</div>
     </div>
-  );
+    <div style={{display: 'grid', gap: compact ? 10 : 14, marginTop: compact ? 14 : 22}}>
+      {turns.map((turn, i) => {
+        const shown = seconds >= turn.at;
+        const speaking = seconds >= turn.at && seconds < turn.until;
+        const age = Math.max(0, seconds - turn.at);
+        const stalledNow = turn.stalled && seconds > 7.5 && seconds < 12;
+        const typed = Math.min(turn.text.length, Math.floor(turn.text.length * Math.min(1, age / .9)));
+        const color = turn.speaker === 'Me' ? p.human : p.lime;
+        return <div key={i} style={{display: shown ? 'block' : 'none', padding: compact ? '12px 15px' : '16px 19px', borderRadius: 18, background: speaking ? `${color}12` : 'rgba(255,255,255,.022)', border: `1px solid ${speaking ? `${color}77` : 'rgba(255,255,255,.07)'}`, opacity: speaking ? 1 : .54, transition: 'none'}}>
+          <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}><span style={{fontFamily: mono, color, fontSize: compact ? 13 : 15}}>{turn.speaker === 'Me' ? 'LEARNER' : 'GPT-LIVE'}</span><Waveform active={speaking && !stalledNow} color={color} intensity={stalledNow ? .12 : 1} flat={stalledNow} /></div>
+          <div style={{fontFamily: sans, color: p.text, fontSize: compact ? 23 : 29, lineHeight: 1.22, marginTop: -7}}>{turn.text.slice(0, typed)}{stalledNow ? <span style={{color: p.amber}}> ···</span> : null}</div>
+        </div>;
+      })}
+    </div>
+  </div>;
 };
 
-const Timecode: React.FC = () => {
-  const frame = useCurrentFrame();
-  const {durationInFrames} = useVideoConfig();
-  return (
-    <div
-      style={{
-        position: 'absolute',
-        left: 110,
-        right: 110,
-        bottom: 116,
-        display: 'flex',
-        justifyContent: 'space-between',
-        color: 'rgba(153,170,159,0.76)',
-        fontFamily: 'Menlo, Monaco, monospace',
-        fontSize: 17,
-      }}
-    >
-      <span>1920 x 1080 • 30 fps • no BGM</span>
-      <span>
-        t+{(frame / fps).toFixed(1)} / {(durationInFrames / fps).toFixed(0)}s
-      </span>
-    </div>
-  );
-};
+const HudFrame: React.FC<{src: string; tag: string; signal?: number}> = ({src, tag, signal = 0}) => <div style={{...panel, padding: 26, position: 'relative', overflow: 'hidden'}}>
+  <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: 18}}><span style={label}>Even G2 · simulator capture</span><span style={{fontFamily: mono, color: p.muted, fontSize: 14}}>{tag}</span></div>
+  <div style={{height: 522, borderRadius: 26, background: '#061008', display: 'grid', placeItems: 'center', overflow: 'hidden', position: 'relative'}}>
+    <div style={{position: 'absolute', inset: 25, border: '9px solid rgba(222,235,227,.48)', borderRadius: 210}} />
+    <div style={{width: 760, height: 380, overflow: 'hidden', borderRadius: 24, boxShadow: `0 0 ${40 + signal * 50}px rgba(153,255,100,.25)`}}><Img src={src} style={{width: '100%', height: '100%', objectFit: 'cover'}} /></div>
+  </div>
+  <div style={{fontFamily: mono, color: 'rgba(202,221,207,.52)', fontSize: 14, marginTop: 16}}>official simulator · 576 × 288</div>
+</div>;
 
-export const LinguaLensVideo: React.FC = () => {
-  return (
-    <AbsoluteFill style={{fontFamily: 'Avenir Next, Helvetica, Arial, sans-serif'}}>
-      <Background />
-      <Grain />
-      <Sequence from={SCENES[0]!.start * fps} durationInFrames={SCENES[0]!.duration * fps}>
-        <ColdOpenScene />
-      </Sequence>
-      <Sequence from={SCENES[1]!.start * fps} durationInFrames={SCENES[1]!.duration * fps}>
-        <ProblemScene />
-      </Sequence>
-      <Sequence from={SCENES[2]!.start * fps} durationInFrames={SCENES[2]!.duration * fps}>
-        <RevealScene />
-      </Sequence>
-      <Sequence from={SCENES[3]!.start * fps} durationInFrames={SCENES[3]!.duration * fps}>
-        <CoreDemoScene />
-      </Sequence>
-      <Sequence from={SCENES[4]!.start * fps} durationInFrames={SCENES[4]!.duration * fps}>
-        <BuildScene />
-      </Sequence>
-      <Sequence from={SCENES[5]!.start * fps} durationInFrames={SCENES[5]!.duration * fps}>
-        <CloseScene />
-      </Sequence>
-      {SCENES.map((scene, index) => (
-        <Sequence key={scene.id} from={scene.start * fps} durationInFrames={scene.duration * fps}>
-          <Audio src={staticFile(AUDIO_FILES[index]!)} />
-        </Sequence>
-      ))}
-      <SubtitleLayer />
-      <Timecode />
-    </AbsoluteFill>
-  );
-};
+const SignalBridge: React.FC<{progress: number}> = ({progress}) => <div style={{position: 'absolute', left: '48.3%', top: '47%', width: '5%', height: 3, background: 'rgba(153,255,100,.16)', overflow: 'visible'}}>
+  <div style={{position: 'absolute', width: 18, height: 18, borderRadius: 99, top: -7.5, left: `${progress * 100}%`, background: p.lime, opacity: progress ? 1 : 0, boxShadow: '0 0 28px 8px rgba(153,255,100,.65)'}} />
+</div>;
+
+const ColdOpen: React.FC = () => { const s = localFrame(0) / fps; return <Scene title="Cold open"><div style={{maxWidth: 1400, margin: 'auto', paddingTop: 70}}><LiveConversation seconds={s} /><div style={{height: 18}} />{s > 9 ? <div style={{textAlign: 'center', fontFamily: mono, color: p.amber, letterSpacing: '.14em', fontSize: 16}}>THE CONVERSATION IS STILL WAITING</div> : null}</div></Scene>; };
+
+const Problem: React.FC = () => { const s = localFrame(18) / fps; return <Scene title="The problem"><div style={{display: 'grid', gridTemplateColumns: '1.03fr .97fr', gap: 34, alignItems: 'center', flex: 1}}><div><div style={{fontFamily: sans, fontSize: 83, fontWeight: 700, letterSpacing: '-.055em', lineHeight: .94, color: p.text}}>The best learning moment disappears in real time.</div><div style={{marginTop: 28, color: p.muted, fontSize: 30, lineHeight: 1.35}}>A phone takes your eyes away. Moving on loses the phrase. The turn keeps moving either way.</div><div style={{display: 'flex', gap: 14, marginTop: 34}}>{['idea', 'stall', 'lookup', 'lost turn'].map((x,i) => <div key={x} style={{fontFamily: mono, color: i === 1 ? p.amber : p.muted, borderTop: `2px solid ${i === 1 ? p.amber : p.line}`, paddingTop: 12, flex: 1}}>{x}</div>)}</div></div><LiveConversation seconds={Math.min(11.6, 4 + s * .4)} compact ghost /></div></Scene>; };
+
+const Reveal: React.FC = () => { const f = localFrame(40); const enter = spring({fps, frame: f, config: {damping: 15}}); return <Scene title="Reveal"><div style={{display: 'grid', gridTemplateColumns: '.88fr 1.12fr', gap: 40, flex: 1, alignItems: 'center'}}><div style={{transform: `scale(${.9 + enter*.1})`}}><HudFrame src={hud[0]} tag="silent coach" signal={enter} /></div><div><div style={{fontSize: 100, fontFamily: sans, fontWeight: 700, color: p.text, letterSpacing: '-.06em'}}>LinguaLens</div><div style={{fontSize: 36, color: p.mint, marginTop: 10}}>A coach that stays inside the conversation.</div><div style={{fontSize: 29, lineHeight: 1.42, color: p.muted, marginTop: 32}}>A silent, glanceable HUD on Even G2: complete phrases when needed, nothing when not.</div></div></div></Scene>; };
+
+const CoreDemo: React.FC = () => { const s = localFrame(52) / fps; const stage = s < 13 ? 'stall detected' : s < 23 ? 'hint selected' : s < 34 ? 'word gloss' : s < 45 ? 'recap' : 'quiet'; const src = s < 13 ? hud[0] : s < 23 ? hud[1] : s < 34 ? hud[3] : s < 45 ? hud[4] : hud[5]; const signal = s < 10 ? 0 : Math.min(1, (s - 10) / 1.2); return <Scene title="Core demo" note="same conversation · a visual coach responds"><div style={{position: 'relative', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 30, flex: 1}}><LiveConversation seconds={s} /><HudFrame src={src} tag={stage} signal={signal} /><SignalBridge progress={signal} />{s > 13 && s < 21 ? <div style={{position: 'absolute', right: 48, bottom: 57, width: 550, padding: 16, borderRadius: 16, background: 'rgba(153,255,100,.14)', border: '1px solid rgba(153,255,100,.55)', color: p.mint, fontFamily: mono, fontSize: 17}}>SELECTED → “Friday is too tight.”</div> : null}</div></Scene>; };
+
+const Build: React.FC = () => { const s = localFrame(100) / fps; return <Scene title="Why glasses / how it's built"><div style={{display: 'grid', gridTemplateColumns: '.7fr 1.3fr', gap: 30, flex: 1}}><LiveConversation seconds={Math.min(8, s*.22 + 2)} compact ghost /><div style={{display: 'grid', gridTemplateRows: '1fr .9fr', gap: 24}}><div style={{display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 18}}>{[['Why glasses','Phone breaks eye contact. Audio talks over the turn.'],['Codex + models','Codex built it. GPT-5.6 writes review phrases. luna judges urgency.'],['BLE honesty','Text first. One image. Tiny payloads.']].map(([t,b]) => <div key={t} style={{...panel,padding:28}}><div style={{fontSize:31,color:p.text,fontWeight:700}}>{t}</div><div style={{fontSize:22,lineHeight:1.38,color:p.muted,marginTop:18}}>{b}</div></div>)}</div><div style={{...panel,padding:28}}><div style={label}>runtime path</div><div style={{display:'flex',alignItems:'center',gap:10,marginTop:28}}>{['Mic','ASR','Judge','Hint / Word','Recap','HUD'].map((x,i)=><React.Fragment key={x}><div style={{flex:1, padding:'15px 8px',borderRadius:14,textAlign:'center',background:'rgba(153,255,100,.07)',border:'1px solid rgba(153,255,100,.24)',color:p.mint,fontFamily:mono,fontSize:16}}>{x}</div>{i<5?<span style={{color:p.lime}}>→</span>:null}</React.Fragment>)}</div></div></div></div></Scene>; };
+
+const Close: React.FC = () => { const s = localFrame(140) / fps; const end = s > 17; return <Scene title="Close">{end ? <div style={{...panel,display:'grid',placeItems:'center',flex:1}}><div style={{textAlign:'center'}}><div style={{fontSize:112,fontWeight:700,letterSpacing:'-.07em',color:p.text}}>LinguaLens</div><div style={{fontSize:35,color:p.mint,marginTop:12}}>Full phrases when you&apos;re stuck. Silence when you&apos;re not.</div><div style={{fontFamily:mono,fontSize:24,color:p.lime,marginTop:30}}>github.com/kolife01/lingua-lens</div><div style={{fontSize:21,color:p.muted,marginTop:15}}>Built with Codex &amp; GPT-5.6</div></div></div> : <div style={{display:'grid',gridTemplateColumns:'1.08fr .92fr',gap:30,flex:1}}><div style={{...panel,padding:32}}><div style={label}>Try it locally</div><div style={{fontSize:66,fontWeight:700,lineHeight:.98,letterSpacing:'-.05em',color:p.text,marginTop:20}}>The full coaching loop, in two minutes.</div><div style={{fontSize:28,lineHeight:1.4,color:p.muted,marginTop:28}}>No glasses. No API key. The official simulator runs a scripted conversation with the same coaching loop live.</div><div style={{fontFamily:mono,color:p.mint,fontSize:22,marginTop:42}}>github.com/kolife01/lingua-lens</div></div><div><LiveConversation seconds={Math.min(18, s + 2)} compact ghost /></div></div>}</Scene>; };
+
+const Scene: React.FC<{title: string; note?: string; children: React.ReactNode}> = ({title,note,children}) => <AbsoluteFill style={{padding:'72px 104px 70px',fontFamily:sans}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:25}}><div style={label}>{title}</div>{note?<div style={{fontFamily:mono,fontSize:14,color:p.muted}}>{note}</div>:null}</div>{children}</AbsoluteFill>;
+
+export const LinguaLensVideo: React.FC = () => <AbsoluteFill style={{fontFamily:sans}}><Background />
+  <Sequence from={0} durationInFrames={18*fps}><ColdOpen /></Sequence><Sequence from={18*fps} durationInFrames={22*fps}><Problem /></Sequence><Sequence from={40*fps} durationInFrames={12*fps}><Reveal /></Sequence><Sequence from={52*fps} durationInFrames={48*fps}><CoreDemo /></Sequence><Sequence from={100*fps} durationInFrames={40*fps}><Build /></Sequence><Sequence from={140*fps} durationInFrames={25*fps}><Close /></Sequence>
+  {SCENES.map((scene,i)=><Sequence key={scene.id} from={scene.start*fps} durationInFrames={scene.duration*fps}><Audio src={staticFile(AUDIO_FILES[i])} /></Sequence>)}
+</AbsoluteFill>;

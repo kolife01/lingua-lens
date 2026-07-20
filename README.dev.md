@@ -7,7 +7,9 @@ npm install
 npm run dev
 ```
 
-First launch without a saved API key shows a setup form in the companion WebView. The key is stored once with `bridge.setLocalStorage('lingualens.openai_api_key', ...)`.
+Production builds never contain API keys. First launch without a saved API key shows a setup form in the companion WebView, and the key is stored on-device with `bridge.setLocalStorage('lingualens.openai_api_key', ...)`.
+
+For development-only convenience, copy `.env.example` to `.env.local` and set `OPENAI_API_KEY`. The Vite dev server reads that value and exposes it only through `GET /__devkey`; the WebView requests it only when `import.meta.env.DEV` is true. Do not use `VITE_` variables for API keys.
 
 ## Simulator
 
@@ -77,7 +79,7 @@ node scripts/show-session.mjs /path/to/export.json
 ```
 
 - The session viewer prints a readable timeline for `ASR -> coach decision -> HUD render/quiet`, plus recap-flow and nod events, then ends with latency and estimated-cost summaries.
-- The dev server still exposes `POST /__log` only in development, and the panel shows `http://localhost:5173/__log` as a suggestion in dev, but nothing is sent unless that endpoint field is actually filled in.
+- The dev server exposes `POST /__log` and `GET /__devkey` only in development. The key endpoint exists solely to support a local `.env.local` during development; production uses the runtime setup screen and bridge local storage exclusively.
 - HUD layout is fixed to `TextContainer x3 + ImageContainer x1`.
 - Text writes are throttled to `>=200ms`; hero image writes are throttled to `>=1000ms`.
 - When a card TTL expires, the HUD returns to a quiet state and keeps the subtle `tap = help` hint visible on the aux line.

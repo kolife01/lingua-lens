@@ -68,7 +68,6 @@ const HERO_ID = 4
 
 const HERO_WIDTH = 200
 const HERO_HEIGHT = 100
-const ENV_API_KEY = import.meta.env.VITE_OPENAI_API_KEY?.trim() ?? ''
 
 const DEMO_PARAM = new URLSearchParams(window.location.search).get('demo')
 const MOCK_PARAM = new URLSearchParams(window.location.search).get('mock')
@@ -272,7 +271,7 @@ async function initializePage(): Promise<void> {
 async function boot(): Promise<void> {
   budgetSnapshot = await budgetTracker.getSnapshot()
   renderBudgetPanel()
-  apiKey = ENV_API_KEY || ((await loadStoredApiKey(bridge)) ?? '')
+  apiKey = (import.meta.env.DEV ? await loadDevelopmentApiKey() : '') || ((await loadStoredApiKey(bridge)) ?? '')
   lastSavedLog = await loadSessionLog(bridge)
   refreshSessionDebug()
 
@@ -295,6 +294,17 @@ async function boot(): Promise<void> {
   }
 
   await startLive()
+}
+
+async function loadDevelopmentApiKey(): Promise<string> {
+  try {
+    const response = await fetch('/__devkey', { cache: 'no-store' })
+    if (!response.ok) return ''
+    const payload = await response.json() as { apiKey?: unknown }
+    return typeof payload.apiKey === 'string' ? payload.apiKey.trim() : ''
+  } catch {
+    return ''
+  }
 }
 
 async function enterSetup(): Promise<void> {

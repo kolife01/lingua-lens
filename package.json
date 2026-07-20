@@ -8,6 +8,7 @@
     "demo": "vite --host 0.0.0.0 --port 5173 --mode development",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "thumbnail": "node scripts/make-thumbnail.mjs",
     "session:show": "node scripts/show-session.mjs",
     "pack": "evenhub pack",
     "simulate": "evenhub-simulator http://localhost:5173",
@@ -19,6 +20,7 @@
   "devDependencies": {
     "@evenrealities/evenhub-cli": "^0.1.12",
     "@evenrealities/evenhub-simulator": "^0.7.2",
+    "sharp": "^0.35.3",
     "typescript": "^5.7.0",
     "vite": "^5.4.0"
   }
